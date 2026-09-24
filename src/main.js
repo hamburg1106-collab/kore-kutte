@@ -14,7 +14,9 @@ import "./style.css";
 import firebase from "firebase/compat/app";
 import "firebase/compat/firestore";
 
-const DEFAULT_MODEL = "gemini-3.8-flash";
+/* 一覧が取れていないときに使うモデル。
+   最新ではなく一世代前を既定にする（理由は resolveModel のコメント） */
+const DEFAULT_MODEL = "gemini-3.5-flash";
 
 /* 設定の置き場所。固定にしておくと、続けて操作しても同じものが2つできない */
 const PROFILE_ID = "me";
@@ -143,17 +145,35 @@ function flashRank(id) {
   return Number(m[1]) * 1000 + Number(m[2] || 0);
 }
 
-/* 設定が「自動」のときに実際に使うモデルを決める */
+/* 新しい順に並べたFlashのID一覧 */
+function rankedFlashModels() {
+  return getCachedModels()
+    .map((id) => ({ id: id, rank: flashRank(id) }))
+    .filter((x) => x.rank !== null)
+    .sort((a, b) => b.rank - a.rank)
+    .map((x) => x.id);
+}
+
+/* 設定が「自動」のときに実際に使うモデルを決める。
+
+   いちばん新しいものは選ばない。出たばかりのモデルは需要が集中していて、
+   無料枠だと503（混み合っています）が返り続けることがある。
+   2026年9月、gemini-3.8-flash がまさにその状態で判定がほとんど通らなかった。
+   一つ前の世代なら写真の判定精度はほとんど変わらず、返ってくる確率が上がる。 */
 function resolveModel() {
   const chosen = state.profile.model || "auto";
   if (chosen !== "auto") return chosen;
 
-  const ranked = getCachedModels()
-    .map((id) => ({ id: id, rank: flashRank(id) }))
-    .filter((x) => x.rank !== null)
-    .sort((a, b) => b.rank - a.rank);
+  const ranked = rankedFlashModels();
+  if (!ranked.length) return DEFAULT_MODEL;
+  return ranked[1] || ranked[0];
+}
 
-  return ranked.length ? ranked[0].id : DEFAULT_MODEL;
+/* 混み合っていたときに逃がす先。本命とは違うものを返す */
+function fallbackModel() {
+  const primary = resolveModel();
+  const other = rankedFlashModels().find((id) => id !== primary);
+  return other || primary;
 }
 
 /* APIキーで使えるモデルの一覧を取り直す */
@@ -194,7 +214,7 @@ function buildModelSelect() {
   sel.innerHTML = "";
   const auto = document.createElement("option");
   auto.value = "auto";
-  auto.textContent = "自動（いちばん新しいFlashを使う）";
+  auto.textContent = "自動（安定して返るFlashを使う）";
   sel.appendChild(auto);
 
   flash.concat(others).forEach((id) => {
@@ -1088,62 +1108,17 @@ const RESPONSE_SCHEMA = {
   required: ["is_food", "name", "portion", "calories", "confidence", "note"],
 };
 
-async function askGemini(base64) {
-  const key = getApiKey();
-  if (!key) {
-    throw new Error("設定タブで Gemini APIキーを入れてください。");
-  }
+/* 混雑・一時障害。待てば直るので投げ返さずに試し直す */
+const RETRYABLE_STATUS = [500, 502, 503, 504];
+/* 何ミリ秒待ってから次を試すか。長すぎると撮り直したほうが早くなる */
+const BACKOFF_MS = [1500, 4000];
 
-  const model = resolveModel();
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    encodeURIComponent(model) +
-    ":generateContent";
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const body = {
-    contents: [
-      {
-        parts: [
-          { inline_data: { mime_type: "image/jpeg", data: base64 } },
-          { text: JUDGE_PROMPT },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
-    },
-  };
-
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    throw new Error("通信できませんでした。ネットワークの状態を確認してください。");
-  }
-
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) {
-    const msg = (data && data.error && data.error.message) || "HTTP " + res.status;
-    if (res.status === 400 || res.status === 401 || res.status === 403) {
-      throw new Error("APIキーが正しくないようです。設定タブを見直してください。\n\n" + msg);
-    }
-    if (res.status === 404) {
-      throw new Error(
-        "モデル「" + model + "」が使えませんでした。設定タブで別のモデルを選んでください。\n\n" + msg
-      );
-    }
-    if (res.status === 429) {
-      throw new Error("無料枠の上限に達しました。しばらく待ってからもう一度試してください。\n\n" + msg);
-    }
-    throw new Error("判定に失敗しました。\n\n" + msg);
-  }
-
+/* 成功したレスポンスから判定結果を取り出す */
+function parseJudgement(data) {
   if (data && data.promptFeedback && data.promptFeedback.blockReason) {
     throw new Error("この写真は安全フィルタにかかって判定できませんでした。別の写真で試してください。");
   }
@@ -1165,6 +1140,89 @@ async function askGemini(base64) {
   } catch (e) {
     throw new Error("判定結果を読み取れませんでした。もう一度試してください。");
   }
+}
+
+/* 写真を判定する。
+
+   混み合っている（503）だけで撮り直させるのは無駄なので、写真を持ったまま
+   間を空けて試し直し、最後の1回は別のモデルへ逃がす。
+   キーの誤りと使いすぎは待っても直らないので、その場で理由を出して止める。 */
+async function askGemini(base64) {
+  const key = getApiKey();
+  if (!key) {
+    throw new Error("設定タブで Gemini APIキーを入れてください。");
+  }
+
+  const body = {
+    contents: [
+      {
+        parts: [
+          { inline_data: { mime_type: "image/jpeg", data: base64 } },
+          { text: JUDGE_PROMPT },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: RESPONSE_SCHEMA,
+    },
+  };
+
+  const models = [resolveModel(), resolveModel(), fallbackModel()];
+  let lastError = null;
+
+  for (let i = 0; i < models.length; i++) {
+    if (i > 0) await sleep(BACKOFF_MS[i - 1]);
+
+    const model = models[i];
+    const url =
+      "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(model) +
+      ":generateContent";
+
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      lastError = new Error("通信できませんでした。ネットワークの状態を確認してください。");
+      continue;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (res.ok) return parseJudgement(data);
+
+    const msg = (data && data.error && data.error.message) || "HTTP " + res.status;
+
+    // キーの誤りはモデルを変えても直らない
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      throw new Error("APIキーが正しくないようです。設定タブを見直してください。\n\n" + msg);
+    }
+    // 使いすぎは待っても直らない。試し直すと枠を余計に食うだけ
+    if (res.status === 429) {
+      throw new Error("無料枠の上限に達しました。しばらく待ってからもう一度試してください。\n\n" + msg);
+    }
+    // モデル名が古い場合。一覧を取り直せば直るので、まず別のモデルを試す
+    if (res.status === 404) {
+      lastError = new Error(
+        "モデル「" + model + "」が使えませんでした。設定タブでモデル一覧を取り直してください。\n\n" + msg
+      );
+      continue;
+    }
+    if (RETRYABLE_STATUS.indexOf(res.status) >= 0) {
+      lastError = new Error(
+        "混み合っていて判定できませんでした。少し待ってからもう一度試してください。\n\n" +
+          model + " / HTTP " + res.status + " / " + msg
+      );
+      continue;
+    }
+    throw new Error("判定に失敗しました。\n\n" + msg);
+  }
+
+  throw lastError || new Error("判定に失敗しました。もう一度試してください。");
 }
 
 /* ---------- 判定の流れ ---------- */
