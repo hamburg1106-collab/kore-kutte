@@ -197,7 +197,7 @@ async function fetchModels(key) {
   return list;
 }
 
-/* 設定タブのモデル選択肢を作り直す */
+/* 設定画面のモデル選択肢を作り直す */
 function buildModelSelect() {
   const sel = document.getElementById("inModel");
   const current = state.profile.model || "auto";
@@ -374,10 +374,13 @@ const state = {
 let Store = null;
 let unsubscribers = [];
 
-function setBadge(text, on) {
-  const badge = document.getElementById("syncBadge");
-  badge.textContent = text;
-  badge.classList.toggle("on", !!on);
+/* クラウドに保存できていないときだけ、画面の上に注意を出す。
+   スマホ1台で使うので「同期中」のような表示はしない（ふだんは見えないところで
+   クラウドにも保存していて、機種変更やキャッシュ消去のときの保険になっている）。 */
+function setStoreWarning(msg) {
+  const el = document.getElementById("storeWarn");
+  el.textContent = msg || "";
+  el.hidden = !msg;
 }
 
 function subscribeAll() {
@@ -464,7 +467,7 @@ function fallbackToLocal(err) {
   Store = createLocalBackend();
   state.profileId = null; // クラウド側のIDは使えないので捨てる
 
-  setBadge("この端末に保存", false);
+  setStoreWarning("クラウドに保存できていません。記録はこの端末の中だけにあります。");
   document.getElementById("storeNote").textContent =
     "クラウドに接続できなかったため（" +
     ((err && err.code) || "原因不明") +
@@ -511,11 +514,14 @@ async function initStore() {
   Store = backend || createLocalBackend();
 
   if (Store.kind === "firebase") {
-    setBadge("接続中…", false);
+    setStoreWarning("");
     document.getElementById("storeNote").textContent =
-      "記録はクラウドに保存され、他の端末でも同じ内容が見られます。APIキーだけはこの端末の中だけに置かれます。";
+      "記録はこの端末とクラウドの両方に保存されています。APIキーだけはこの端末の中だけに置かれます。";
   } else {
-    setBadge("この端末に保存", false);
+    // file:// で開いているのは開発中の確認だけなので、そのときは注意を出さない
+    if (initError || canUseCloud) {
+      setStoreWarning("クラウドに保存できていません。記録はこの端末の中だけにあります。");
+    }
     document.getElementById("storeNote").textContent = initError
       ? "クラウドの準備に失敗したため（" +
         ((initError && initError.message) || "原因不明") +
@@ -526,13 +532,6 @@ async function initStore() {
   }
 
   subscribeAll();
-
-  // 接続できたことが分かってからバッジを「同期中」にする
-  if (Store.kind === "firebase") {
-    setTimeout(() => {
-      if (Store.kind === "firebase") setBadge("端末間で同期中", true);
-    }, 1500);
-  }
 }
 
 /* ---------- 計算 ---------- */
@@ -618,8 +617,10 @@ const VERDICT_TEXT = {
 /* ---------- 画面の描画 ---------- */
 
 function renderAll() {
-  renderRemainCard();
-  renderBalance();
+  renderHeader();
+  renderHero();
+  renderChips();
+  renderShootArea();
   renderMealList();
   renderWeek();
   renderBmrBox();
@@ -659,94 +660,125 @@ function renderReminder() {
   document.getElementById("reminder").hidden = !needsReminder();
 }
 
-function renderRemainCard() {
-  const card = document.getElementById("remainCard");
-  const el = document.getElementById("remainKcal");
-  const sub = document.getElementById("remainSub");
-
-  if (!calcBmr(state.profile)) {
-    el.textContent = "—";
-    sub.textContent = "設定タブで身長・体重・年齢を入れてください";
-    card.classList.remove("over");
-    return;
-  }
-
-  const key = todayKey();
-  const remain = calcRemain(key);
-  const detail = calcBurnDetail(key);
-  const mark = detail.source === "actual" ? "実測" : "見込み";
-
-  el.textContent = remain.toLocaleString();
-  card.classList.toggle("over", remain <= 0);
-  sub.textContent =
-    remain > 0
-      ? `消費 ${detail.total.toLocaleString()}(${mark}) − 食べた ${calcIntake(key).toLocaleString()}`
-      : "今日はもうオーバーしています";
-}
-
-function renderBalance() {
+/* 上の帯：表示している日付。過去の日を見ているときは押すと今日に戻る */
+function renderHeader() {
   const key = state.viewDate;
-  const detail = calcBurnDetail(key);
-  const burn = detail.total;
-  const intake = calcIntake(key);
-  const remain = calcRemain(key);
-  const max = Math.max(burn, intake, 1);
-
-  document.getElementById("dayLabel").textContent = labelOf(key);
-  document.getElementById("barBurn").style.width = (burn / max) * 100 + "%";
-  document.getElementById("barIntake").style.width = (intake / max) * 100 + "%";
-  document.getElementById("numBurn").textContent = burn.toLocaleString();
-  document.getElementById("numIntake").textContent = intake.toLocaleString();
-  document.getElementById("numRemain").textContent = remain.toLocaleString();
-  document.getElementById("goalNote").textContent =
-    "目標: " + (GOAL_TEXT[state.profile.goal] || "");
-
-  document
-    .querySelector(".balance-remain")
-    .classList.toggle("over", remain <= 0);
-
-  // 消費に対してどれだけ食べたか
-  const rateEl = document.getElementById("intakeRate");
-  if (burn > 0 && intake > 0) {
-    const rate = Math.round((intake / burn) * 100);
-    rateEl.innerHTML = "消費の <strong>" + rate + "%</strong> を摂取";
-    rateEl.classList.toggle("over", rate > 100);
-  } else {
-    rateEl.textContent = "";
-    rateEl.classList.remove("over");
-  }
-
-  // その消費カロリーがどこから来た数字なのかを示す
-  const d = dailyOf(key);
-  const srcEl = document.getElementById("burnSource");
-  if (!burn) {
-    srcEl.textContent = "";
-  } else if (detail.source === "actual") {
-    srcEl.textContent = "Googleヘルスの実測値を使用 " + (updatedLabel(d.updatedAt) || "");
-  } else if (detail.actual > 0) {
-    srcEl.textContent =
-      "見込みで計算中（実測 " +
-      detail.actual.toLocaleString() +
-      " はまだ途中の値）" +
-      (updatedLabel(d.updatedAt) ? " / " + updatedLabel(d.updatedAt) : "");
-  } else {
-    srcEl.textContent = "基礎代謝と歩数からの見込み";
-  }
-
-  document.getElementById("activeUpdated").textContent = updatedLabel(d.updatedAt);
+  const label = document.getElementById("dayLabel");
+  label.textContent = labelOf(key);
+  label.classList.toggle("past", key !== todayKey());
 
   // 未来の日付には進めないようにする
   document.getElementById("dayNext").disabled = key >= todayKey();
+}
 
-  // 読み込んでいない古い日は、運動の入力も食事の追加も止めておく
+/* その日の目標（食べてよい量）。消費から、減量なら差し引き、増量なら上乗せする */
+function calcTarget(key) {
+  return calcBurn(key) - (GOAL_DIFF[state.profile.goal] || 0);
+}
+
+/* リングの周の長さ。style.css の stroke-dasharray と同じ値 */
+const RING_LENGTH = 2 * Math.PI * 86;
+
+/* 主役のリングと大きな数字。
+   状態は色だけでなく中央の文字（あと／残りわずか／オーバー）でも伝える */
+function renderHero() {
+  const hero = document.getElementById("hero");
+  const fill = document.getElementById("ringFill");
+  const label = document.getElementById("ringLabel");
+  const value = document.getElementById("remainKcal");
+  const sub = document.getElementById("remainSub");
+
+  hero.classList.remove("warn", "bad", "empty");
+
+  if (!calcBmr(state.profile)) {
+    hero.classList.add("empty");
+    fill.style.strokeDashoffset = RING_LENGTH;
+    label.textContent = "はじめに";
+    value.textContent = "—";
+    sub.textContent = "右上の ⚙ から身長・体重・年齢を入れてください";
+    return;
+  }
+
+  const key = state.viewDate;
+  const target = calcTarget(key);
+  const intake = calcIntake(key);
+  const remain = target - intake;
+  const ratio = target > 0 ? intake / target : 1;
+
+  fill.style.strokeDashoffset = RING_LENGTH * (1 - Math.min(1, ratio));
+
+  if (remain < 0) {
+    hero.classList.add("bad");
+    label.textContent = "オーバー";
+    value.textContent = "+" + Math.abs(remain).toLocaleString();
+  } else if (ratio >= 0.85) {
+    hero.classList.add("warn");
+    label.textContent = "残りわずか";
+    value.textContent = remain.toLocaleString();
+  } else {
+    label.textContent = key === todayKey() ? "あと" : "残り";
+    value.textContent = remain.toLocaleString();
+  }
+
+  const goal = state.profile.goal;
+  const goalNote = goal && goal !== "keep" ? "（" + GOAL_TEXT[goal] + "）" : "";
+  sub.textContent =
+    "食べた " + intake.toLocaleString() +
+    " ／ 目標 " + target.toLocaleString() + goalNote +
+    (target > 0 ? " ・ " + Math.round(ratio * 100) + "%" : "");
+}
+
+/* 歩数と消費のチップ。押すと入力シートが開く */
+function renderChips() {
+  const key = state.viewDate;
+  const d = dailyOf(key);
+  const detail = calcBurnDetail(key);
+  const hasProfile = !!calcBmr(state.profile);
   const old = isTooOld(key);
-  document.getElementById("inSteps").disabled = old;
-  document.getElementById("inActive").disabled = old;
 
-  const addBtn = document.getElementById("btnAddToDay");
-  addBtn.disabled = old;
-  addBtn.textContent =
-    key === todayKey() ? "今日に手で追加" : labelOf(key) + " に手で追加";
+  const steps = Number(d.steps) || 0;
+  document.getElementById("chipStepsVal").textContent = steps ? steps.toLocaleString() : "—";
+  const stepKcal = Math.round(steps * (state.profile.weight || 0) * 0.0005);
+  document.getElementById("chipStepsSub").textContent =
+    steps && stepKcal ? "+" + stepKcal + " kcal ぶん" : "タップで入力";
+
+  document.getElementById("chipBurnVal").textContent =
+    hasProfile ? detail.total.toLocaleString() : "—";
+
+  // その消費がどこから来た数字なのかを示す（見込みか、Googleヘルスの実測か）
+  const burnSub = document.getElementById("chipBurnSub");
+  burnSub.classList.toggle("actual", detail.source === "actual");
+  if (!hasProfile) {
+    burnSub.textContent = "設定が必要";
+  } else if (detail.source === "actual") {
+    burnSub.textContent = "実測 " + (updatedLabel(d.updatedAt) || "");
+  } else if (detail.actual > 0) {
+    burnSub.textContent = "見込み（実測は途中）";
+  } else {
+    burnSub.textContent = "見込み ・ タップで実測を入力";
+  }
+
+  // 読み込んでいない古い日は入力させない（重複登録になるため）
+  document.getElementById("chipSteps").disabled = old;
+  document.getElementById("chipBurn").disabled = old;
+}
+
+/* 撮影ボタンは今日を見ているときだけ出す（写真判定は今日の記録にしか入らないため）。
+   初めて使うときは、足りない準備をボタンの下で案内する */
+function renderShootArea() {
+  const isToday = state.viewDate === todayKey();
+  document.getElementById("shootArea").hidden = !isToday;
+
+  const hint = document.getElementById("setupHint");
+  if (!calcBmr(state.profile)) {
+    hint.textContent = "① まず ⚙ 設定で、身長・体重・年齢を入れてください →";
+    hint.hidden = false;
+  } else if (!getApiKey()) {
+    hint.textContent = "写真判定には、最初に1回だけ準備が要ります（Gemini APIキー） →";
+    hint.hidden = false;
+  } else {
+    hint.hidden = true;
+  }
 }
 
 function renderMealList() {
@@ -755,9 +787,20 @@ function renderMealList() {
     (a.createdAt || "").localeCompare(b.createdAt || "")
   );
 
+  const key = state.viewDate;
+  const old = isTooOld(key);
+
+  document.getElementById("mealsTitle").textContent =
+    key === todayKey() ? "今日食べたもの" : weekLabel(key) + " に食べたもの";
+
+  // 読み込んでいない古い日には追加させない（重複登録になるため）
+  const addBtn = document.getElementById("btnAddToDay");
+  addBtn.disabled = old;
+  addBtn.setAttribute("aria-label", labelOf(key) + " に手で追加");
+
   const empty = document.getElementById("mealEmpty");
   empty.hidden = rows.length > 0;
-  empty.textContent = isTooOld(state.viewDate)
+  empty.textContent = old
     ? "この日の記録は読み込んでいません（消えてはいません）"
     : "まだ記録がありません";
 
@@ -766,11 +809,18 @@ function renderMealList() {
   rows.forEach((m) => {
     const li = document.createElement("li");
 
+    // 写真のない記録も行の頭を揃える
     if (m.thumb) {
       const img = document.createElement("img");
       img.src = m.thumb;
       img.alt = "";
       li.appendChild(img);
+    } else {
+      const ph = document.createElement("div");
+      ph.className = "meal-noimg";
+      ph.textContent = "🍽";
+      ph.setAttribute("aria-hidden", "true");
+      li.appendChild(ph);
     }
 
     const body = document.createElement("div");
@@ -793,13 +843,17 @@ function renderMealList() {
 
     const kcal = document.createElement("div");
     kcal.className = "meal-kcal";
-    kcal.textContent = (Number(m.kcal) || 0).toLocaleString() + " kcal";
+    kcal.textContent = (Number(m.kcal) || 0).toLocaleString();
+    const unit = document.createElement("small");
+    unit.textContent = "kcal";
+    kcal.appendChild(unit);
     li.appendChild(kcal);
 
     const del = document.createElement("button");
     del.className = "meal-del";
     del.textContent = "×";
     del.title = "削除";
+    del.setAttribute("aria-label", m.name + " を削除");
     del.onclick = () => {
       if (confirm(`「${m.name}」を記録から消しますか？`)) {
         Store.remove("meals", m.id).catch((e) => notifySaveFailed(e, "削除"));
@@ -820,53 +874,92 @@ function weekLabel(key) {
   return m + "/" + d + "(" + w + ")";
 }
 
-/* 直近7日の消費と摂取を並べて、数日単位の傾向が見えるようにする */
+/* 棒の下に出す短い日付。狭いので「27(土)」程度に収める */
+function weekShortLabel(key) {
+  if (key === todayKey()) return "今日";
+  const [y, m, d] = key.split("-").map(Number);
+  const w = ["日", "月", "火", "水", "木", "金", "土"][new Date(y, m - 1, d).getDay()];
+  return d + "(" + w + ")";
+}
+
+/* 棒の高さの上限（%）。これを超えた日は頭打ちにして、数字で示す */
+const WEEK_MAX_RATE = 130;
+/* 棒を置く箱の高さ(px)。style.css の .week-barbox と合わせる */
+const WEEK_BAR_H = 96;
+
+/* 直近7日の「消費に対して食べた割合」を棒で並べる。100%の位置に点線を引く。
+   棒を押すとその日の表示に切り替わる（リング・チップ・食べたものが連動する） */
 function renderWeek() {
-  const ul = document.getElementById("weekList");
-  ul.innerHTML = "";
+  const box = document.getElementById("weekChart");
+  box.innerHTML = "";
 
-  if (!calcBmr(state.profile)) return;
+  if (!calcBmr(state.profile)) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.style.gridColumn = "1 / -1";
+    p.style.textAlign = "center";
+    p.textContent = "設定を入れると表示されます";
+    box.appendChild(p);
+    return;
+  }
 
-  for (let i = 0; i < 7; i++) {
+  // 古い日を左、今日を右にする（時間は左から右へ流れるほうが読みやすい）
+  for (let i = 6; i >= 0; i--) {
     const key = shiftKey(todayKey(), -i);
     const burn = calcBurn(key);
     const intake = calcIntake(key);
     const rate = burn > 0 ? Math.round((intake / burn) * 100) : 0;
     const over = intake > burn;
+    const selected = key === state.viewDate;
 
-    const li = document.createElement("li");
-    if (key === todayKey()) li.className = "today";
-    li.onclick = () => {
+    const col = document.createElement("button");
+    col.className =
+      "week-col" + (over ? " over" : "") + (intake ? "" : " none") + (selected ? " sel" : "");
+    col.setAttribute("role", "listitem");
+    col.setAttribute(
+      "aria-label",
+      labelOf(key) +
+        (intake
+          ? " 食べた " + intake.toLocaleString() + " ／ 消費 " + burn.toLocaleString() + "（" + rate + "%）"
+          : " 記録なし")
+    );
+    col.onclick = () => {
       state.viewDate = key;
       fillBurnForm();
       renderAll();
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
 
-    const day = document.createElement("div");
-    day.className = "week-day";
-    day.textContent = weekLabel(key);
-    li.appendChild(day);
+    // 数字は、選んでいる日とオーバーした日にだけ出す（全部に出すとうるさい）
+    const rateEl = document.createElement("div");
+    rateEl.className = "week-rate";
+    rateEl.textContent = intake && (selected || over) ? rate + "%" : "";
+    col.appendChild(rateEl);
 
+    const barBox = document.createElement("div");
+    barBox.className = "week-barbox";
     const bar = document.createElement("div");
     bar.className = "week-bar";
-    const fill = document.createElement("span");
-    fill.style.width = Math.min(100, rate) + "%";
-    if (over) fill.className = "over";
-    bar.appendChild(fill);
-    li.appendChild(bar);
+    bar.style.height = Math.round((Math.min(rate, WEEK_MAX_RATE) / WEEK_MAX_RATE) * WEEK_BAR_H) + "px";
+    barBox.appendChild(bar);
+    col.appendChild(barBox);
 
-    const num = document.createElement("div");
-    num.className = "week-num" + (over ? " over" : "");
-    if (intake > 0) {
-      num.innerHTML =
-        "<b>" + rate + "%</b> <small>" + intake.toLocaleString() + "/" + burn.toLocaleString() + "</small>";
-    } else {
-      num.innerHTML = "<small>記録なし</small>";
-    }
-    li.appendChild(num);
+    const day = document.createElement("div");
+    day.className = "week-day";
+    day.textContent = weekShortLabel(key);
+    col.appendChild(day);
 
-    ul.appendChild(li);
+    box.appendChild(col);
+  }
+
+  // 100%の目安線。棒の箱の実際の位置を測って引く（文字の高さが端末で違っても合うように）
+  const firstBox = box.querySelector(".week-barbox");
+  if (firstBox) {
+    const line = document.createElement("div");
+    line.className = "week-line";
+    line.style.top =
+      firstBox.offsetTop + firstBox.offsetHeight * (1 - 100 / WEEK_MAX_RATE) + "px";
+    box.appendChild(line);
   }
 }
 
@@ -878,31 +971,115 @@ function renderBmrBox() {
     : "—";
 }
 
-/* ---------- タブ ---------- */
+/* ---------- 重なって出る画面（設定・入力シート・ダイアログ） ----------
+   開くときにブラウザの履歴を1つ積んでおく。こうするとAndroidの「戻る」で
+   アプリごと閉じてしまわず、開いている画面だけが閉じる。 */
 
-function showTab(name) {
-  document
-    .querySelectorAll("#tabs button")
-    .forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  document
-    .querySelectorAll(".tab-panel")
-    .forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
+function hideOverlay(el) {
+  el.hidden = true;
+  if (!document.querySelector(".overlay:not([hidden])")) {
+    document.body.classList.remove("no-scroll");
+  }
 }
 
-document.getElementById("tabs").addEventListener("click", (ev) => {
-  const btn = ev.target.closest("button");
-  if (btn) showTab(btn.dataset.tab);
+function openOverlay(el) {
+  if (!el.hidden) return;
+  el.hidden = false;
+  document.body.classList.add("no-scroll");
+  history.pushState({ overlay: el.id }, "");
+}
+
+function closeOverlay(el) {
+  if (el.hidden) return;
+  // 自分が積んだ履歴なら「戻る」で閉じる（popstate の中で hideOverlay される）
+  if (history.state && history.state.overlay === el.id) history.back();
+  else hideOverlay(el);
+}
+
+window.addEventListener("popstate", () => {
+  document.querySelectorAll(".overlay:not([hidden])").forEach(hideOverlay);
 });
 
-/* お知らせを押したら、その場で入力できるよう収支タブの入力欄へ飛ばす */
+/* 背景の暗いところを押したら閉じる（中身を押したときは閉じない） */
+document.querySelectorAll(".sheet, .modal").forEach((el) => {
+  el.addEventListener("click", (ev) => {
+    if (ev.target === el) closeOverlay(el);
+  });
+});
+
+/* ---------- 設定 ---------- */
+
+const settingsPanel = document.getElementById("settingsPanel");
+
+function openSettings(focusId) {
+  openOverlay(settingsPanel);
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.focus();
+    }, 250);
+  }
+}
+
+document.getElementById("btnSettings").onclick = () => openSettings();
+document.getElementById("btnCloseSettings").onclick = () => closeOverlay(settingsPanel);
+
+/* 身長などが未入力のときは、リングを押しても設定が開く */
+document.getElementById("hero").onclick = () => {
+  if (!calcBmr(state.profile)) openSettings("inHeight");
+};
+
+/* 撮影ボタンの下の準備案内。足りないものの入力欄まで直接連れていく */
+document.getElementById("setupHint").onclick = () => {
+  openSettings(calcBmr(state.profile) ? "inApiKey" : "inHeight");
+};
+
+/* ---------- 運動・消費の入力シート ---------- */
+
+const burnSheet = document.getElementById("burnSheet");
+
+function openBurnSheet(focusId) {
+  fillBurnForm();
+  const key = state.viewDate;
+  document.getElementById("burnSheetTitle").textContent =
+    key === todayKey() ? "今日の運動・消費" : labelOf(key) + " の運動・消費";
+  openOverlay(burnSheet);
+  setTimeout(() => document.getElementById(focusId).focus(), 250);
+}
+
+document.getElementById("chipSteps").onclick = () => openBurnSheet("inSteps");
+document.getElementById("chipBurn").onclick = () => openBurnSheet("inActive");
+document.getElementById("burnCancel").onclick = () => closeOverlay(burnSheet);
+
+document.getElementById("burnSave").onclick = async () => {
+  closeOverlay(burnSheet);
+  if (await saveDaily()) showToast("保存しました");
+};
+
+/* キーボードの「決定」でも保存できるようにする */
+["inSteps", "inActive"].forEach((id) => {
+  document.getElementById(id).addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      document.getElementById("burnSave").click();
+    }
+  });
+});
+
+/* 寝る前のお知らせを押したら、今日の消費エネルギーの入力をすぐ出す */
 document.getElementById("reminder").onclick = () => {
+  state.viewDate = todayKey();
+  renderAll();
+  openBurnSheet("inActive");
+};
+
+/* 日付を押したら今日に戻る */
+document.getElementById("dayLabel").onclick = () => {
+  if (state.viewDate === todayKey()) return;
   state.viewDate = todayKey();
   fillBurnForm();
   renderAll();
-  showTab("today");
-  const el = document.getElementById("inActive");
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
-  setTimeout(() => el.focus(), 400);
 };
 
 /* ---------- 設定フォーム ---------- */
@@ -967,7 +1144,10 @@ settingFields.forEach(([id, key, cast]) => {
 /* APIキーの入出力 */
 const apiKeyInput = document.getElementById("inApiKey");
 apiKeyInput.value = getApiKey();
-apiKeyInput.addEventListener("change", () => setApiKey(apiKeyInput.value.trim()));
+apiKeyInput.addEventListener("change", () => {
+  setApiKey(apiKeyInput.value.trim());
+  renderAll(); // 撮影ボタンの下の準備案内を消すため
+});
 
 /* ---------- 同期コードの操作 ---------- */
 
@@ -979,20 +1159,20 @@ syncInput.addEventListener("change", () => {
   if (v === getSyncCode()) return;
 
   if (v.length < 16) {
-    alert("同期コードは16文字以上にしてください。");
+    alert("引き継ぎコードは16文字以上にしてください。");
     syncInput.value = getSyncCode();
     return;
   }
 
   setSyncCode(v);
-  alert("同期コードを変えました。読み込み直します。");
+  alert("引き継ぎコードを変えました。読み込み直します。");
   location.reload();
 });
 
 document.getElementById("btnCopyCode").onclick = async () => {
   try {
     await navigator.clipboard.writeText(syncInput.value);
-    alert("同期コードをコピーしました。スマホの設定タブに貼り付けてください。");
+    alert("引き継ぎコードをコピーしました。新しいスマホの ⚙ 設定 →「機種変更・バックアップ」に貼り付けてください。");
   } catch (e) {
     // https以外ではクリップボードが使えないので、選択状態にして手でコピーしてもらう
     syncInput.focus();
@@ -1003,7 +1183,7 @@ document.getElementById("btnCopyCode").onclick = async () => {
 
 document.getElementById("btnNewCode").onclick = () => {
   const ok = confirm(
-    "同期コードを作り直すと、今まで同期していた記録は見えなくなります。よろしいですか？"
+    "引き継ぎコードを作り直すと、今までの記録は見えなくなります。よろしいですか？"
   );
   if (!ok) return;
   setSyncCode(makeSyncCode());
@@ -1031,8 +1211,10 @@ function fillBurnForm() {
   const active = document.getElementById("inActive");
   if (document.activeElement !== steps) steps.value = d.steps || "";
   if (document.activeElement !== active) active.value = d.activeKcal || "";
+  document.getElementById("activeUpdated").textContent = updatedLabel(d.updatedAt);
 }
 
+/* 入力シートの「保存」で呼ぶ。保存できたら true を返す */
 async function saveDaily() {
   const key = state.viewDate;
   const patch = {
@@ -1047,12 +1229,11 @@ async function saveDaily() {
     await Store.setDoc("daily", key, patch);
   } catch (e) {
     notifySaveFailed(e, "運動の記録");
+    return false;
   }
   renderAll();
+  return true;
 }
-
-document.getElementById("inSteps").addEventListener("change", saveDaily);
-document.getElementById("inActive").addEventListener("change", saveDaily);
 
 /* ---------- 写真の読み込みと縮小 ---------- */
 
@@ -1150,7 +1331,7 @@ function parseJudgement(data) {
 async function askGemini(base64) {
   const key = getApiKey();
   if (!key) {
-    throw new Error("設定タブで Gemini APIキーを入れてください。");
+    throw new Error("右上の ⚙ 設定で Gemini APIキーを入れてください。");
   }
 
   const body = {
@@ -1171,8 +1352,15 @@ async function askGemini(base64) {
   const models = [resolveModel(), resolveModel(), fallbackModel()];
   let lastError = null;
 
+  const judgingText = document.getElementById("judgingText");
+  judgingText.textContent = "判定中…";
+
   for (let i = 0; i < models.length; i++) {
-    if (i > 0) await sleep(BACKOFF_MS[i - 1]);
+    if (i > 0) {
+      // 黙って数秒止まると壊れたように見えるので、試し直していることを出す
+      judgingText.textContent = "混み合っています。もう一度試しています（" + (i + 1) + "/" + models.length + "）";
+      await sleep(BACKOFF_MS[i - 1]);
+    }
 
     const model = models[i];
     const url =
@@ -1199,7 +1387,7 @@ async function askGemini(base64) {
 
     // キーの誤りはモデルを変えても直らない
     if (res.status === 400 || res.status === 401 || res.status === 403) {
-      throw new Error("APIキーが正しくないようです。設定タブを見直してください。\n\n" + msg);
+      throw new Error("APIキーが正しくないようです。右上の ⚙ 設定を見直してください。\n\n" + msg);
     }
     // 使いすぎは待っても直らない。試し直すと枠を余計に食うだけ
     if (res.status === 429) {
@@ -1208,7 +1396,7 @@ async function askGemini(base64) {
     // モデル名が古い場合。一覧を取り直せば直るので、まず別のモデルを試す
     if (res.status === 404) {
       lastError = new Error(
-        "モデル「" + model + "」が使えませんでした。設定タブでモデル一覧を取り直してください。\n\n" + msg
+        "モデル「" + model + "」が使えませんでした。⚙ 設定でモデル一覧を取り直してください。\n\n" + msg
       );
       continue;
     }
@@ -1238,7 +1426,7 @@ photoInput.addEventListener("change", async () => {
   if (!file) return;
 
   if (!calcBmr(state.profile)) {
-    showError("先に設定タブで身長・体重・年齢を入れてください。");
+    showError("先に右上の ⚙ 設定で、身長・体重・年齢を入れてください。");
     return;
   }
 
@@ -1303,6 +1491,9 @@ function showVerdict() {
 
   verdictEl.hidden = false;
   errorEl.hidden = true;
+
+  // 結果は撮影ボタンの下に出るので、見落とさないよう結果の位置まで動かす
+  verdictEl.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 const btnEat = document.getElementById("btnEat");
@@ -1371,12 +1562,12 @@ function openModal(title, initial, onOk) {
   document.getElementById("mPortion").value = (initial && initial.portion) || "";
   document.getElementById("mKcal").value = (initial && initial.kcal) || "";
   modalCallback = onOk;
-  modal.hidden = false;
-  document.getElementById("mName").focus();
+  openOverlay(modal);
+  setTimeout(() => document.getElementById("mName").focus(), 100);
 }
 
 document.getElementById("mCancel").onclick = () => {
-  modal.hidden = true;
+  closeOverlay(modal);
   modalCallback = null;
 };
 
@@ -1392,7 +1583,7 @@ document.getElementById("mOk").onclick = () => {
     return;
   }
   const cb = modalCallback;
-  modal.hidden = true;
+  closeOverlay(modal);
   modalCallback = null;
   if (cb) {
     cb({
@@ -1432,9 +1623,10 @@ document.getElementById("btnManualOpen").onclick = () => {
   openManualAdd(todayKey(), "写真なしで追加");
 };
 
-/* 収支タブから、表示中の日に追加する */
+/* 「食べたもの」の＋から、表示中の日に追加する（昨日の入れ忘れなど） */
 document.getElementById("btnAddToDay").onclick = () => {
-  openManualAdd(state.viewDate, labelOf(state.viewDate) + " に手で追加");
+  const key = state.viewDate;
+  openManualAdd(key, key === todayKey() ? "手で追加" : labelOf(key) + " に手で追加");
 };
 
 /* ---------- APIキーの動作確認 ---------- */

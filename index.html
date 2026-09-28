@@ -23,125 +23,142 @@
 <body>
 <div class="wrap">
 
-  <header class="app-header">
-    <h1>これ食っていい？</h1>
-    <span class="sync-badge" id="syncBadge">起動中…</span>
+  <!-- 上の帯：表示している日付と設定ボタン -->
+  <header class="top">
+    <div class="day-switch">
+      <button class="icon-btn" id="dayPrev" aria-label="前の日">‹</button>
+      <button class="day-label" id="dayLabel" aria-label="今日に戻る">—</button>
+      <button class="icon-btn" id="dayNext" aria-label="次の日">›</button>
+    </div>
+    <button class="icon-btn" id="btnSettings" aria-label="設定">⚙</button>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button data-tab="judge" class="active">判定</button>
-    <button data-tab="today">今日の収支</button>
-    <button data-tab="settings">設定</button>
-  </nav>
+  <!-- クラウドに保存できていないときだけ出す（記録が消えうる状態なので知らせる） -->
+  <p class="store-warn" id="storeWarn" hidden></p>
 
-  <!-- ========== タブ1: 判定 ========== -->
-  <section class="tab-panel active" id="tab-judge">
+  <button class="reminder" id="reminder" hidden>
+    🌙 寝る前に、今日の消費エネルギーを入れて締めよう
+  </button>
 
-    <div class="remain-card" id="remainCard">
-      <div class="remain-label">今日あと食べられる</div>
-      <div class="remain-value"><span id="remainKcal">—</span><span class="unit">kcal</span></div>
-      <div class="remain-sub" id="remainSub">設定タブで身長・体重を入れてください</div>
+  <!-- 主役：あと何kcal食べられるか -->
+  <section class="hero" id="hero">
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+        <circle class="ring-track" cx="100" cy="100" r="86" />
+        <circle class="ring-fill" id="ringFill" cx="100" cy="100" r="86" />
+      </svg>
+      <div class="ring-center">
+        <div class="ring-label" id="ringLabel">あと</div>
+        <div class="ring-value" id="remainKcal">—</div>
+        <div class="ring-unit">kcal</div>
+      </div>
     </div>
+    <p class="hero-sub" id="remainSub"></p>
+  </section>
 
-    <button class="reminder" id="reminder" hidden>
-      🌙 寝る前にGoogleヘルスの消費エネルギーを入れると、今日の記録が締まります
+  <!-- 歩数と消費。タップするとその場で入力できる -->
+  <div class="chips">
+    <button class="chip" id="chipSteps">
+      <span class="chip-top"><span class="chip-icon" aria-hidden="true">👟</span>歩数</span>
+      <span class="chip-val"><b id="chipStepsVal">—</b></span>
+      <span class="chip-sub" id="chipStepsSub">タップで入力</span>
     </button>
+    <button class="chip" id="chipBurn">
+      <span class="chip-top"><span class="chip-icon" aria-hidden="true">🔥</span>消費</span>
+      <span class="chip-val"><b id="chipBurnVal">—</b><small>kcal</small></span>
+      <span class="chip-sub" id="chipBurnSub">タップで入力</span>
+    </button>
+  </div>
 
+  <!-- 写真で判定（今日を表示しているときだけ） -->
+  <div class="shoot-area" id="shootArea">
     <label class="shoot-btn" id="shootBtn">
       <input type="file" accept="image/*" capture="environment" id="photoInput" hidden>
-      <span class="shoot-icon">📷</span>
-      <span class="shoot-text">写真で判定する</span>
+      <span class="shoot-icon" aria-hidden="true">📷</span>
+      <span class="shoot-text">これ食っていい？</span>
       <span class="shoot-hint">お菓子は栄養成分表示も一緒に写すと正確</span>
     </label>
+    <button class="btn-link" id="btnManualOpen">写真なしで入力する</button>
+    <button class="setup-hint" id="setupHint" hidden></button>
+  </div>
 
-    <div class="judging" id="judging" hidden>
-      <div class="spinner"></div>
-      <p>判定中…</p>
+  <div class="judging" id="judging" hidden>
+    <div class="spinner"></div>
+    <p id="judgingText">判定中…</p>
+  </div>
+
+  <div class="error-box" id="judgeError" hidden></div>
+
+  <!-- 判定結果 -->
+  <div class="verdict" id="verdict" hidden>
+    <img class="verdict-photo" id="verdictPhoto" alt="撮影した写真">
+    <div class="verdict-headline" id="verdictHeadline"></div>
+    <div class="verdict-food">
+      <div class="verdict-name" id="verdictName"></div>
+      <div class="verdict-portion" id="verdictPortion"></div>
     </div>
-
-    <div class="error-box" id="judgeError" hidden></div>
-
-    <!-- 判定結果 -->
-    <div class="verdict" id="verdict" hidden>
-      <img class="verdict-photo" id="verdictPhoto" alt="撮影した写真">
-      <div class="verdict-headline" id="verdictHeadline"></div>
-      <div class="verdict-food">
-        <div class="verdict-name" id="verdictName"></div>
-        <div class="verdict-portion" id="verdictPortion"></div>
-      </div>
-      <div class="verdict-kcal"><span id="verdictKcal"></span><span class="unit">kcal</span></div>
-      <div class="verdict-note" id="verdictNote"></div>
-      <div class="verdict-actions">
-        <button class="btn-eat" id="btnEat">食べた！記録する</button>
-        <button class="btn-skip" id="btnSkip">やめた</button>
-      </div>
-      <button class="btn-link" id="btnFixKcal">カロリーを手で直す</button>
+    <div class="verdict-kcal"><span id="verdictKcal"></span><span class="unit">kcal</span></div>
+    <div class="verdict-note" id="verdictNote"></div>
+    <div class="verdict-actions">
+      <button class="btn-eat" id="btnEat">食べた！記録する</button>
+      <button class="btn-skip" id="btnSkip">やめた</button>
     </div>
+    <button class="btn-link" id="btnFixKcal">カロリーを手で直す</button>
+  </div>
 
-    <div class="manual-add">
-      <button class="btn-link" id="btnManualOpen">写真なしで手入力する</button>
+  <!-- 食べたもの -->
+  <section class="block">
+    <div class="block-head">
+      <h2 id="mealsTitle">今日食べたもの</h2>
+      <button class="icon-btn add" id="btnAddToDay" aria-label="手で追加">＋</button>
     </div>
-
-  </section>
-
-  <!-- ========== タブ2: 今日の収支 ========== -->
-  <section class="tab-panel" id="tab-today">
-
-    <div class="date-nav">
-      <button id="dayPrev" aria-label="前の日">‹</button>
-      <span id="dayLabel">—</span>
-      <button id="dayNext" aria-label="次の日">›</button>
-    </div>
-
-    <div class="balance">
-      <div class="bar-row">
-        <span class="bar-label">消費</span>
-        <div class="bar"><div class="bar-fill burn" id="barBurn"></div></div>
-        <span class="bar-num" id="numBurn">0</span>
-      </div>
-      <div class="bar-row">
-        <span class="bar-label">摂取</span>
-        <div class="bar"><div class="bar-fill intake" id="barIntake"></div></div>
-        <span class="bar-num" id="numIntake">0</span>
-      </div>
-      <div class="balance-remain">
-        残り <strong id="numRemain">0</strong> kcal
-        <span class="balance-goal" id="goalNote"></span>
-      </div>
-      <div class="intake-rate" id="intakeRate"></div>
-      <div class="burn-source" id="burnSource"></div>
-    </div>
-
-    <h2 class="sec-title">運動・消費の入力</h2>
-    <div class="burn-inputs">
-      <label>歩数
-        <input type="number" id="inSteps" inputmode="numeric" placeholder="例 6000" autocomplete="off">
-      </label>
-      <label>Googleヘルスの消費エネルギー(kcal)
-        <input type="number" id="inActive" inputmode="numeric" placeholder="寝る前に入れると正確" autocomplete="off">
-        <span class="updated-at" id="activeUpdated"></span>
-      </label>
-    </div>
-    <p class="hint">
-      Googleヘルス（Fit）アプリの「消費エネルギー」をそのまま入れてください。
-      日中に入れた数字はまだ途中の値なので、<strong>寝る前に入れ直すと一番正確</strong>になります。
-      入れ忘れても、基礎代謝と歩数からの見込みで計算するので大きくは外れません。
-    </p>
-
-    <h2 class="sec-title">食べたもの</h2>
     <ul class="meal-list" id="mealList"></ul>
     <p class="empty" id="mealEmpty">まだ記録がありません</p>
-    <button class="btn-sub" id="btnAddToDay">この日に手で追加</button>
-
-    <h2 class="sec-title">この1週間</h2>
-    <ul class="week-list" id="weekList"></ul>
-
   </section>
 
-  <!-- ========== タブ3: 設定 ========== -->
-  <section class="tab-panel" id="tab-settings">
+  <!-- この1週間 -->
+  <section class="block">
+    <div class="block-head">
+      <h2>この1週間</h2>
+      <span class="block-note">消費に対して食べた割合（点線が100%）</span>
+    </div>
+    <div class="week-chart" id="weekChart" role="list"></div>
+  </section>
 
-    <h2 class="sec-title">からだの情報</h2>
+</div>
+
+<!-- ========== 運動・消費の入力（下から出てくる） ========== -->
+<div class="overlay sheet" id="burnSheet" hidden>
+  <div class="sheet-card" role="dialog" aria-labelledby="burnSheetTitle">
+    <h3 id="burnSheetTitle">今日の運動・消費</h3>
+    <label>歩数
+      <input type="number" id="inSteps" inputmode="numeric" placeholder="例 6000" autocomplete="off">
+    </label>
+    <label>Googleヘルスの消費エネルギー(kcal)
+      <input type="number" id="inActive" inputmode="numeric" placeholder="寝る前に入れると正確" autocomplete="off">
+      <span class="updated-at" id="activeUpdated"></span>
+    </label>
+    <p class="hint">
+      Googleヘルス（Fit）の「消費エネルギー」をそのまま入れてください。
+      日中の数字はまだ途中なので、<strong>寝る前に入れ直すと一番正確</strong>です。
+      入れなくても、基礎代謝と歩数からの見込みで計算します。
+    </p>
+    <div class="sheet-actions">
+      <button class="btn-sub" id="burnCancel">閉じる</button>
+      <button class="btn-eat" id="burnSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 設定（全画面） ========== -->
+<div class="overlay panel" id="settingsPanel" hidden>
+  <div class="panel-inner">
+    <header class="panel-head">
+      <h2>設定</h2>
+      <button class="btn-done" id="btnCloseSettings">完了</button>
+    </header>
+
+    <h3 class="sec-title">からだの情報</h3>
     <div class="form-grid">
       <label>身長(cm)<input type="number" id="inHeight" inputmode="decimal" placeholder="170" autocomplete="off"></label>
       <label>体重(kg)<input type="number" id="inWeight" inputmode="decimal" placeholder="65" autocomplete="off"></label>
@@ -175,7 +192,7 @@
       <div>1日の消費の目安 <strong id="showTdee">—</strong> kcal</div>
     </div>
 
-    <h2 class="sec-title">写真判定の設定</h2>
+    <h3 class="sec-title">写真判定</h3>
     <label class="wide">Gemini APIキー
       <input type="text" id="inApiKey" inputmode="text" placeholder="AIza… から始まる文字列" autocomplete="off">
     </label>
@@ -185,39 +202,39 @@
     </p>
     <label class="wide">使うモデル
       <select id="inModel">
-        <option value="auto">自動（いちばん新しいFlashを使う）</option>
+        <option value="auto">自動（安定して返るFlashを使う）</option>
       </select>
       <span class="updated-at" id="modelNow"></span>
     </label>
-    <button class="btn-sub" id="btnRefreshModels">使えるモデルの一覧を取り直す</button>
-    <button class="btn-sub" id="btnTestKey">キーの動作を確認する</button>
+    <div class="btn-row">
+      <button class="btn-sub" id="btnRefreshModels">一覧を更新</button>
+      <button class="btn-sub" id="btnTestKey">キーを確認</button>
+    </div>
     <div class="error-box" id="keyTestResult" hidden></div>
 
-    <h2 class="sec-title">端末間の同期</h2>
-    <label class="wide">同期コード
-      <input type="text" id="inSyncCode" autocomplete="off" spellcheck="false">
-    </label>
-    <div class="sync-actions">
-      <button class="btn-sub" id="btnCopyCode">コピー</button>
-      <button class="btn-sub" id="btnNewCode">新しく作り直す</button>
-    </div>
-    <p class="hint">
-      この合言葉を知っている端末だけが、自分のデータを読み書きできます。
-      <strong>スマホでも同じコードを入れると、同じ記録が見られます。</strong>
-      人に教えないでください。作り直すと今までの記録は見えなくなります。
-    </p>
-
-    <h2 class="sec-title">データ</h2>
-    <button class="btn-sub" id="btnExport">バックアップを書き出す</button>
-    <p class="hint" id="storeNote"></p>
-
-  </section>
-
+    <!-- 同期コードはふだん触らないので畳んでおく。クラウド保存は見えないところで動いている -->
+    <details class="fold">
+      <summary>機種変更・バックアップ</summary>
+      <p class="hint" id="storeNote"></p>
+      <label class="wide">引き継ぎコード
+        <input type="text" id="inSyncCode" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="hint">
+        記録はクラウドにも保存されています。<strong>機種変更したら、新しいスマホでこのコードを入れる</strong>と記録が戻ります。
+        人に教えないでください。作り直すと今までの記録は見えなくなります。
+      </p>
+      <div class="btn-row">
+        <button class="btn-sub" id="btnCopyCode">コピー</button>
+        <button class="btn-sub" id="btnNewCode">作り直す</button>
+      </div>
+      <button class="btn-sub" id="btnExport">バックアップを書き出す</button>
+    </details>
+  </div>
 </div>
 
 <!-- 手入力・修正用のダイアログ -->
-<div class="modal" id="modal" hidden>
-  <div class="modal-card">
+<div class="overlay modal" id="modal" hidden>
+  <div class="modal-card" role="dialog" aria-labelledby="modalTitle">
     <h3 id="modalTitle">手入力で追加</h3>
     <label>食べたもの<input type="text" id="mName" placeholder="例 ポテトチップス" autocomplete="off"></label>
     <label>量<input type="text" id="mPortion" placeholder="例 1袋 60g" autocomplete="off"></label>
