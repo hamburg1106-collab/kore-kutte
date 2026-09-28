@@ -8,18 +8,21 @@
 /* ===== 色 =====
    状態色（緑・黄・赤）は明暗それぞれで見分けやすさを検証済み。
    図形に塗る色（--ok 等）と、文字に使う色（--ok-ink 等）を分けているのは、
-   図形として目立つ色が小さい文字では読みにくいことがあるため。 */
+   図形として目立つ色が小さい文字では読みにくいことがあるため。
+   ボタンなどのメイン色（--accent）はモノトーン。色は状態（緑・黄・赤）だけに使い、
+   「緑＝余裕あり」の意味がボタンの色とまざらないようにしている。 */
 :root {
-  --bg: #f3f5f3;
+  --bg: #f4f5f7;
   --card: #ffffff;
-  --ink: #17201b;
-  --ink-sub: #5f6b64;
-  --line: #e1e6e2;
-  --track: #e6ebe7;
+  --ink: #1c1f24;
+  --ink-sub: #626873;
+  --line: #e3e5e9;
+  --track: #e8eaee;
 
-  --accent: #1b7f4e;
+  --accent: #1c1f24;
   --on-accent: #ffffff;
-  --accent-soft: #e3f3e9;
+  --accent-soft: #eceef1;
+  --accent-ink: #1c1f24;
 
   --ok: #1b7f4e;
   --warn: #d69e00;
@@ -29,6 +32,7 @@
   --warn-ink: #8a6100;
   --bad-ink: #b3321f;
 
+  --ok-soft: #e3f3e9;
   --warn-soft: #fbf1d6;
   --bad-soft: #fbe6e3;
 
@@ -38,16 +42,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1311;
-    --card: #1a201d;
-    --ink: #eaf0ec;
-    --ink-sub: #98a59e;
-    --line: #2a322e;
-    --track: #26302b;
+    --bg: #0f1114;
+    --card: #1a1d22;
+    --ink: #eceef1;
+    --ink-sub: #9aa0aa;
+    --line: #2b2f35;
+    --track: #272b31;
 
-    --accent: #3fbf6f;
-    --on-accent: #06210f;
-    --accent-soft: #133322;
+    --accent: #eceef1;
+    --on-accent: #15171a;
+    --accent-soft: #2a2e34;
+    --accent-ink: #eceef1;
 
     --ok: #3fbf6f;
     --warn: #d9a431;
@@ -57,6 +62,7 @@
     --warn-ink: #e3b341;
     --bad-ink: #f87171;
 
+    --ok-soft: #133322;
     --warn-soft: #33290f;
     --bad-soft: #3a1b18;
 
@@ -284,7 +290,7 @@ button { font-family: inherit; }
   border-radius: var(--radius);
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: 0 6px 20px rgba(27,127,78,.25);
+  box-shadow: 0 6px 20px rgba(0,0,0,.18);
   cursor: pointer;
   user-select: none;
 }
@@ -359,7 +365,7 @@ button { font-family: inherit; }
   margin-bottom: 12px;
 }
 
-.verdict.ok   .verdict-headline { background: var(--accent-soft); color: var(--ok-ink); }
+.verdict.ok   .verdict-headline { background: var(--ok-soft); color: var(--ok-ink); }
 .verdict.half .verdict-headline { background: var(--warn-soft);   color: var(--warn-ink); }
 .verdict.stop .verdict-headline { background: var(--bad-soft);    color: var(--bad-ink); }
 
@@ -424,7 +430,7 @@ button { font-family: inherit; }
   word-break: break-word;
 }
 
-.error-box.good { background: var(--accent-soft); color: var(--ok-ink); }
+.error-box.good { background: var(--ok-soft); color: var(--ok-ink); }
 
 /* ===== 区切りのブロック ===== */
 .block { margin-top: 26px; }
@@ -444,7 +450,7 @@ button { font-family: inherit; }
   width: 40px;
   height: 40px;
   background: var(--accent-soft);
-  color: var(--ok-ink);
+  color: var(--accent-ink);
   font-size: 22px;
   font-weight: 700;
 }
