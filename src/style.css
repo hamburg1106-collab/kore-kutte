@@ -239,10 +239,10 @@ button { font-family: inherit; }
 /* 身長などが未入力のとき、リングを押すと設定が開く */
 .hero.empty { cursor: pointer; }
 
-/* ===== 歩数・消費のチップ ===== */
+/* ===== 消費カロリーのチップ ===== */
 .chips {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   margin: 16px 0 14px;
 }
@@ -282,6 +282,8 @@ button { font-family: inherit; }
 
 .shoot-btn {
   width: 100%;
+  border: none;
+  font-family: inherit;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -295,6 +297,7 @@ button { font-family: inherit; }
   user-select: none;
 }
 
+.shoot-btn[hidden] { display: none; }
 .shoot-btn:active { transform: scale(.985); }
 .shoot-icon { font-size: 30px; line-height: 1.1; }
 .shoot-text { font-size: 19px; font-weight: 800; letter-spacing: .02em; }
@@ -355,6 +358,8 @@ button { font-family: inherit; }
   border-radius: 14px;
   margin-bottom: 12px;
 }
+
+.verdict-photo[hidden] { display: none; }
 
 .verdict-headline {
   font-size: 32px;
@@ -806,16 +811,62 @@ input:disabled, select:disabled { opacity: .45; }
 /* APIキー欄は type="password" をやめた（パスワード欄があると、パスワード
    マネージャーがページ全体をログイン画面と誤認して他の欄にも出てくるため）。
    代わりにCSSで伏せ字にし、入力中だけ見えるようにする。 */
-#inApiKey {
+.key-input {
   font-family: "IBM Plex Mono", Consolas, monospace;
   -webkit-text-security: disc;
   text-security: disc;
 }
 
-#inApiKey:focus {
+.key-input:focus {
   -webkit-text-security: none;
   text-security: none;
 }
+
+/* ===== はじめての設定 ===== */
+.step-count { margin-left: 6px; font-size: 13px; color: var(--ink-sub); font-weight: 700; }
+
+.welcome-step[hidden] { display: none; }
+.welcome-lead { margin: 8px 0 4px; font-size: 14px; line-height: 1.7; }
+.welcome-note { margin-top: 10px; }
+
+.welcome-next, .welcome-full { width: 100%; margin-top: 8px; }
+.welcome-step > .btn-link { display: block; margin: 8px auto 0; }
+
+.welcome-nav { display: flex; gap: 10px; margin-top: 10px; }
+.welcome-nav .btn-sub { margin: 0; }
+
+/* スマホの種類を選ぶ大きなボタン。押したらそのまま次へ進む */
+.choice-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice b { font-size: 17px; }
+.choice span { font-size: 12px; color: var(--ink-sub); }
+.choice:active { transform: scale(.985); }
+
+/* APIキーの取り方の手順 */
+.guide-steps {
+  margin: 8px 0 14px;
+  padding-left: 1.4em;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.guide-steps a { color: var(--ink); font-weight: 700; }
+.key-guide { margin-top: 0; margin-bottom: 14px; }
 
 /* ===== 一時的なお知らせ（トースト） =====
    保存できたかどうかが分からないと不安なので、画面の下に一瞬だけ出す。 */

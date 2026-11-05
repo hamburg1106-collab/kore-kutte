@@ -327,7 +327,11 @@ function createFirebaseBackend(fsDb, syncCode) {
       }
 
       return query.onSnapshot(
-        (snap) => cb(snap.docs.map((d) => Object.assign({ id: d.id }, d.data()))),
+        (snap) =>
+          cb(
+            snap.docs.map((d) => Object.assign({ id: d.id }, d.data())),
+            snap.metadata.fromCache // まだサーバーに確かめていない仮の結果か
+          ),
         (err) => {
           console.error("firestore " + name + " error", err);
           fallbackToLocal(err);
@@ -362,6 +366,7 @@ const state = {
     sex: "male",
     activity: 1.2,
     goal: "keep",
+    burnMode: "total", // 消費カロリーの入れ方。total=合計(Android) / active=動いた分だけ(iPhone)
     model: "auto",
   },
   profileId: null,
@@ -385,7 +390,7 @@ function setStoreWarning(msg) {
 
 function subscribeAll() {
   unsubscribers = [
-    Store.subscribe("profile", (rows) => {
+    Store.subscribe("profile", (rows, fromCache) => {
       // 置き場所を固定する前に作られた設定が残っていても読めるようにしておく
       const row = rows.find((r) => r.id === PROFILE_ID) || rows[0];
       if (row) {
@@ -395,6 +400,10 @@ function subscribeAll() {
         fillSettingsForm();
       }
       renderAll();
+
+      // 圏外などで手元に何も無いだけかもしれないときは、少し待ってから決める
+      if (row || !fromCache) maybeOpenWelcome();
+      else setTimeout(maybeOpenWelcome, 4000);
     }),
 
     Store.subscribe("meals", (rows) => {
@@ -549,7 +558,7 @@ function calcTdee(p) {
 }
 
 function dailyOf(key) {
-  return state.daily.find((d) => d.date === key) || { date: key, steps: 0, activeKcal: 0 };
+  return state.daily.find((d) => d.date === key) || { date: key, activeKcal: 0 };
 }
 
 function mealsOf(key) {
@@ -563,21 +572,27 @@ function isTooOld(key) {
 
 /* その日の消費カロリーを、見込みと実測の大きい方で出す。
 
-   Googleヘルスの「消費エネルギー」は基礎代謝を含んだ合計だが、あくまで
-   “入力した時点まで”の実績。昼に入れた値をそのまま1日の消費として扱うと、
+   ヘルスアプリの消費カロリーは、あくまで“入力した時点まで”の実績。
+   昼に入れた値をそのまま1日の消費として扱うと、
    夜までに増えるぶんが無視されて判定が不当に厳しくなる。
    そこで「1日を終えたときの見込み」と比べ、大きい方を採用する。
    - 日中は実測がまだ小さいので見込みを使う
-   - よく動いた日や寝る前は実測が見込みを超えるので実測を使う */
+   - よく動いた日や寝る前は実測が見込みを超えるので実測を使う
+
+   Googleヘルスなどは基礎代謝込みの合計が出るが、iPhoneのヘルスケアは
+   「アクティブエネルギー（動いた分）」しか出ない。その入れ方の日は基礎代謝を足す。
+   入れ方は日ごとに残しているので、あとで設定を変えても過去の日は変わらない。
+   以前あった歩数の入力はやめた（消費カロリーに歩いた分も含まれていて二重になるため）。
+   古い記録に歩数が残っていても使わない。 */
 function calcBurnDetail(key) {
   const p = state.profile;
   const bmr = calcBmr(p);
   if (!bmr) return { total: 0, estimate: 0, actual: 0, source: "none" };
 
   const d = dailyOf(key);
-  const stepKcal = (Number(d.steps) || 0) * (p.weight || 0) * 0.0005;
-  const estimate = Math.round(calcTdee(p) + stepKcal);
-  const actual = Math.round(Number(d.activeKcal) || 0);
+  const estimate = calcTdee(p);
+  const input = Math.round(Number(d.activeKcal) || 0);
+  const actual = input && d.burnMode === "active" ? bmr + input : input;
 
   return {
     total: Math.max(estimate, actual),
@@ -639,7 +654,7 @@ function updatedLabel(iso) {
   return t.getMonth() + 1 + "/" + t.getDate() + " " + hhmm + " 更新";
 }
 
-/* 寝る前に消費エネルギーを入れ直してもらうためのお知らせ。
+/* 寝る前に消費カロリーを入れ直してもらうためのお知らせ。
    21時を過ぎていて、今日の数字がまだ入っていないか21時前の入力のときだけ出す */
 function needsReminder() {
   if (!calcBmr(state.profile)) return false;
@@ -728,7 +743,7 @@ function renderHero() {
     (target > 0 ? " ・ " + Math.round(ratio * 100) + "%" : "");
 }
 
-/* 歩数と消費のチップ。押すと入力シートが開く */
+/* 消費カロリーのチップ。押すと入力シートが開く */
 function renderChips() {
   const key = state.viewDate;
   const d = dailyOf(key);
@@ -736,16 +751,10 @@ function renderChips() {
   const hasProfile = !!calcBmr(state.profile);
   const old = isTooOld(key);
 
-  const steps = Number(d.steps) || 0;
-  document.getElementById("chipStepsVal").textContent = steps ? steps.toLocaleString() : "—";
-  const stepKcal = Math.round(steps * (state.profile.weight || 0) * 0.0005);
-  document.getElementById("chipStepsSub").textContent =
-    steps && stepKcal ? "+" + stepKcal + " kcal ぶん" : "タップで入力";
-
   document.getElementById("chipBurnVal").textContent =
     hasProfile ? detail.total.toLocaleString() : "—";
 
-  // その消費がどこから来た数字なのかを示す（見込みか、Googleヘルスの実測か）
+  // その消費がどこから来た数字なのかを示す（見込みか、ヘルスアプリの実測か）
   const burnSub = document.getElementById("chipBurnSub");
   burnSub.classList.toggle("actual", detail.source === "actual");
   if (!hasProfile) {
@@ -759,22 +768,28 @@ function renderChips() {
   }
 
   // 読み込んでいない古い日は入力させない（重複登録になるため）
-  document.getElementById("chipSteps").disabled = old;
   document.getElementById("chipBurn").disabled = old;
 }
 
 /* 撮影ボタンは今日を見ているときだけ出す（写真判定は今日の記録にしか入らないため）。
+   APIキーが無い人には、写真の代わりにカロリーを入れて判定するボタンを出す。
    初めて使うときは、足りない準備をボタンの下で案内する */
 function renderShootArea() {
   const isToday = state.viewDate === todayKey();
   document.getElementById("shootArea").hidden = !isToday;
 
+  const hasKey = !!getApiKey();
+  document.getElementById("shootBtn").hidden = !hasKey;
+  document.getElementById("askBtn").hidden = hasKey;
+  // キーなしだと判定ボタン自体が手入力なので、記録だけの手入力は出さない
+  document.getElementById("btnManualOpen").hidden = !hasKey;
+
   const hint = document.getElementById("setupHint");
   if (!calcBmr(state.profile)) {
-    hint.textContent = "① まず ⚙ 設定で、身長・体重・年齢を入れてください →";
+    hint.textContent = "① まず、はじめの設定をしてください（1分） →";
     hint.hidden = false;
-  } else if (!getApiKey()) {
-    hint.textContent = "写真判定には、最初に1回だけ準備が要ります（Gemini APIキー） →";
+  } else if (!hasKey) {
+    hint.textContent = "📷 写真で判定したいときは（APIキーの設定） →";
     hint.hidden = false;
   } else {
     hint.hidden = true;
@@ -1025,31 +1040,191 @@ function openSettings(focusId) {
 document.getElementById("btnSettings").onclick = () => openSettings();
 document.getElementById("btnCloseSettings").onclick = () => closeOverlay(settingsPanel);
 
-/* 身長などが未入力のときは、リングを押しても設定が開く */
+/* 身長などが未入力のときは、リングを押すと「はじめに」が開く */
 document.getElementById("hero").onclick = () => {
-  if (!calcBmr(state.profile)) openSettings("inHeight");
+  if (!calcBmr(state.profile)) openWelcome();
 };
+
+/* APIキーの欄まで連れていく。取り方の手順も開いておく */
+function openKeySettings() {
+  document.querySelector(".key-guide").open = true;
+  openSettings("inApiKey");
+}
 
 /* 撮影ボタンの下の準備案内。足りないものの入力欄まで直接連れていく */
 document.getElementById("setupHint").onclick = () => {
-  openSettings(calcBmr(state.profile) ? "inApiKey" : "inHeight");
+  if (calcBmr(state.profile)) openKeySettings();
+  else openWelcome();
 };
 
-/* ---------- 運動・消費の入力シート ---------- */
+/* ---------- はじめての設定 ----------
+   身長などが空のまま開いたときに、1問ずつ聞いていく。
+   「次へ」のたびに保存するので、途中で閉じても入れたところまでは残る。 */
+
+const welcomePanel = document.getElementById("welcomePanel");
+const WELCOME_STEPS = 4;
+let welcomeChecked = false; // 自動で出すのは起動して最初の1回だけ
+
+const welcomeFields = [
+  ["wHeight", "height", Number],
+  ["wWeight", "weight", Number],
+  ["wAge", "age", Number],
+  ["wSex", "sex", String],
+  ["wActivity", "activity", Number],
+  ["wGoal", "goal", String],
+];
+
+function showWelcomeStep(n) {
+  welcomePanel.querySelectorAll(".welcome-step").forEach((el) => {
+    el.hidden = Number(el.dataset.step) !== n;
+  });
+  document.getElementById("welcomeCount").textContent = n + " / " + WELCOME_STEPS;
+  welcomePanel.scrollTop = 0;
+}
+
+function openWelcome() {
+  welcomeFields.forEach(([id, key]) => {
+    const v = state.profile[key];
+    if (v !== null && v !== undefined) document.getElementById(id).value = v;
+  });
+  document.getElementById("wApiKey").value = getApiKey();
+  document.getElementById("wKeyResult").hidden = true;
+  showWelcomeStep(1);
+  openOverlay(welcomePanel);
+}
+
+/* 設定の読み込みが終わった時点で、まだ何も入っていなければ出す */
+function maybeOpenWelcome() {
+  if (welcomeChecked) return;
+  welcomeChecked = true;
+  if (!calcBmr(state.profile)) openWelcome();
+}
+
+/* 1問目の答えがありえない数字なら止める（計算が狂うため） */
+function checkWelcomeBody() {
+  const h = Number(document.getElementById("wHeight").value);
+  const w = Number(document.getElementById("wWeight").value);
+  const a = Number(document.getElementById("wAge").value);
+  if (!(h >= 100 && h <= 250)) return "身長をcmで入れてください。";
+  if (!(w >= 25 && w <= 250)) return "体重をkgで入れてください。";
+  if (!(a >= 10 && a <= 100)) return "年齢を入れてください。";
+  return "";
+}
+
+async function saveWelcome() {
+  welcomeFields.forEach(([id, key, cast]) => {
+    const raw = document.getElementById(id).value;
+    if (raw !== "") state.profile[key] = cast(raw);
+  });
+  fillSettingsForm();
+  await storeProfile();
+}
+
+welcomePanel.querySelectorAll("[data-next]").forEach((btn) => {
+  btn.onclick = async () => {
+    if (btn.dataset.next === "2") {
+      const err = checkWelcomeBody();
+      if (err) {
+        alert(err);
+        return;
+      }
+    }
+    showWelcomeStep(Number(btn.dataset.next));
+    await saveWelcome();
+  };
+});
+
+welcomePanel.querySelectorAll("[data-back]").forEach((btn) => {
+  btn.onclick = () => showWelcomeStep(Number(btn.dataset.back));
+});
+
+/* スマホの種類を選んだら、そのまま次へ */
+welcomePanel.querySelectorAll("[data-burn-mode]").forEach((btn) => {
+  btn.onclick = async () => {
+    state.profile.burnMode = btn.dataset.burnMode;
+    showWelcomeStep(4);
+    await saveWelcome();
+  };
+});
+
+/* 保存の完了は待たずに閉じる。クラウドへの書き込みは圏外だと電波が戻るまで終わらず、
+   待っていると「はじめに」が閉じなくなるため（画面にはすぐ反映される） */
+function finishWelcome() {
+  saveWelcome();
+  closeOverlay(welcomePanel);
+  showToast("準備できました");
+}
+
+document.getElementById("welcomeNoKey").onclick = finishWelcome;
+document.getElementById("welcomeClose").onclick = () => closeOverlay(welcomePanel);
+
+document.getElementById("welcomeWithKey").onclick = async () => {
+  const key = document.getElementById("wApiKey").value.trim();
+  const box = document.getElementById("wKeyResult");
+  box.hidden = false;
+  box.className = "error-box";
+
+  if (!key) {
+    box.textContent = "キーを貼り付けてください。キーなしで使う場合は「キーなしではじめる」を押してください。";
+    return;
+  }
+
+  box.textContent = "確認中…";
+  const result = await checkApiKey(key);
+  if (!result.ok) {
+    box.textContent = result.message;
+    return;
+  }
+
+  setApiKey(key);
+  apiKeyInput.value = key;
+  finishWelcome();
+};
+
+/* 機種変更の人は「はじめに」を閉じて、引き継ぎコードの欄へ。
+   history.back() で閉じると、あとから来る popstate が設定まで閉じてしまうので、
+   積んである履歴を設定画面のものに差し替える */
+document.getElementById("welcomeTransfer").onclick = () => {
+  hideOverlay(welcomePanel);
+  syncInput.closest("details").open = true;
+  settingsPanel.hidden = false;
+  document.body.classList.add("no-scroll");
+  history.replaceState({ overlay: settingsPanel.id }, "");
+  setTimeout(() => {
+    syncInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    syncInput.focus();
+  }, 250);
+};
+
+/* ---------- 消費カロリーの入力シート ---------- */
 
 const burnSheet = document.getElementById("burnSheet");
 
-function openBurnSheet(focusId) {
+/* 入れ方（合計か、動いた分だけか）に合わせて、どの数字を入れるかの説明を変える */
+const BURN_HOWTO = {
+  total: {
+    label: "消費カロリーの合計(kcal)",
+    howTo: "Googleヘルス・Fitbitなどの「消費カロリー（消費エネルギー）」をそのまま入れてください。",
+  },
+  active: {
+    label: "アクティブエネルギー(kcal)",
+    howTo: "iPhoneのヘルスケア →「アクティブエネルギー」の今日の数字を入れてください。基礎代謝の分はアプリが足します。",
+  },
+};
+
+function openBurnSheet() {
   fillBurnForm();
   const key = state.viewDate;
+  const how = BURN_HOWTO[state.profile.burnMode] || BURN_HOWTO.total;
   document.getElementById("burnSheetTitle").textContent =
-    key === todayKey() ? "今日の運動・消費" : labelOf(key) + " の運動・消費";
+    key === todayKey() ? "今日の消費カロリー" : labelOf(key) + " の消費カロリー";
+  document.getElementById("inActiveLabel").textContent = how.label;
+  document.getElementById("burnHowTo").textContent = how.howTo;
   openOverlay(burnSheet);
-  setTimeout(() => document.getElementById(focusId).focus(), 250);
+  setTimeout(() => document.getElementById("inActive").focus(), 250);
 }
 
-document.getElementById("chipSteps").onclick = () => openBurnSheet("inSteps");
-document.getElementById("chipBurn").onclick = () => openBurnSheet("inActive");
+document.getElementById("chipBurn").onclick = openBurnSheet;
 document.getElementById("burnCancel").onclick = () => closeOverlay(burnSheet);
 
 document.getElementById("burnSave").onclick = async () => {
@@ -1058,20 +1233,18 @@ document.getElementById("burnSave").onclick = async () => {
 };
 
 /* キーボードの「決定」でも保存できるようにする */
-["inSteps", "inActive"].forEach((id) => {
-  document.getElementById(id).addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      document.getElementById("burnSave").click();
-    }
-  });
+document.getElementById("inActive").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    document.getElementById("burnSave").click();
+  }
 });
 
-/* 寝る前のお知らせを押したら、今日の消費エネルギーの入力をすぐ出す */
+/* 寝る前のお知らせを押したら、今日の消費カロリーの入力をすぐ出す */
 document.getElementById("reminder").onclick = () => {
   state.viewDate = todayKey();
   renderAll();
-  openBurnSheet("inActive");
+  openBurnSheet();
 };
 
 /* 日付を押したら今日に戻る */
@@ -1091,6 +1264,7 @@ const settingFields = [
   ["inSex", "sex", String],
   ["inActivity", "activity", Number],
   ["inGoal", "goal", String],
+  ["inBurnMode", "burnMode", String],
   ["inModel", "model", String],
 ];
 
@@ -1111,7 +1285,11 @@ async function saveProfile() {
     const raw = document.getElementById(id).value;
     state.profile[key] = raw === "" ? null : cast(raw);
   });
+  await storeProfile();
+}
 
+/* いまの state.profile を保存する（設定画面と「はじめに」の両方から使う） */
+async function storeProfile() {
   // APIキーはプロフィールに混ぜない（クラウドに送らないため）
   const payload = {};
   settingFields.forEach(([, key]) => (payload[key] = state.profile[key]));
@@ -1207,9 +1385,7 @@ document.getElementById("dayNext").onclick = () => {
 
 function fillBurnForm() {
   const d = dailyOf(state.viewDate);
-  const steps = document.getElementById("inSteps");
   const active = document.getElementById("inActive");
-  if (document.activeElement !== steps) steps.value = d.steps || "";
   if (document.activeElement !== active) active.value = d.activeKcal || "";
   document.getElementById("activeUpdated").textContent = updatedLabel(d.updatedAt);
 }
@@ -1219,11 +1395,11 @@ async function saveDaily() {
   const key = state.viewDate;
   const patch = {
     date: key,
-    steps: Number(document.getElementById("inSteps").value) || 0,
     activeKcal: Number(document.getElementById("inActive").value) || 0,
+    burnMode: state.profile.burnMode || "total", // 合計か動いた分だけか（calcBurnDetail 参照）
     updatedAt: new Date().toISOString(), // いつの時点の数字かを残す
   };
-  /* 日付そのものを置き場所にする。歩数と消費エネルギーを続けて入力したときに
+  /* 日付そのものを置き場所にする。続けて入力したときに
      同じ日の記録が2つできてしまうのを防ぐ。 */
   try {
     await Store.setDoc("daily", key, patch);
@@ -1475,7 +1651,10 @@ function showVerdict() {
   const mark = decide(f.kcal, remain);
 
   verdictEl.className = "verdict " + mark;
-  document.getElementById("verdictPhoto").src = f.photo;
+  // キーなしで手入力から判定したときは写真が無い
+  const photo = document.getElementById("verdictPhoto");
+  photo.hidden = !f.photo;
+  if (f.photo) photo.src = f.photo;
   document.getElementById("verdictHeadline").textContent = VERDICT_TEXT[mark];
   document.getElementById("verdictName").textContent = f.name;
   document.getElementById("verdictPortion").textContent = f.portion || "";
@@ -1556,8 +1735,9 @@ document.getElementById("btnFixKcal").onclick = () => {
 const modal = document.getElementById("modal");
 let modalCallback = null;
 
-function openModal(title, initial, onOk) {
+function openModal(title, initial, onOk, okLabel) {
   document.getElementById("modalTitle").textContent = title;
+  document.getElementById("mOk").textContent = okLabel || "決定";
   document.getElementById("mName").value = (initial && initial.name) || "";
   document.getElementById("mPortion").value = (initial && initial.portion) || "";
   document.getElementById("mKcal").value = (initial && initial.kcal) || "";
@@ -1623,6 +1803,23 @@ document.getElementById("btnManualOpen").onclick = () => {
   openManualAdd(todayKey(), "写真なしで追加");
 };
 
+/* APIキーが無い人用の判定ボタン。カロリーを入れてもらい、写真のときと同じ判定を出す */
+document.getElementById("askBtn").onclick = () => {
+  if (!calcBmr(state.profile)) {
+    openWelcome();
+    return;
+  }
+  openModal(
+    "これ食っていい？",
+    null,
+    (edited) => {
+      state.pending = Object.assign({ note: "", thumb: "", photo: "" }, edited);
+      showVerdict();
+    },
+    "判定する"
+  );
+};
+
 /* 「食べたもの」の＋から、表示中の日に追加する（昨日の入れ忘れなど） */
 document.getElementById("btnAddToDay").onclick = () => {
   const key = state.viewDate;
@@ -1639,12 +1836,20 @@ document.getElementById("btnTestKey").onclick = async () => {
   box.hidden = false;
   box.className = "error-box";
   box.textContent = "確認中…";
+  renderAll(); // キーの有無で撮影ボタンが切り替わるため
 
   if (!key) {
     box.textContent = "APIキーが空です。";
     return;
   }
 
+  const result = await checkApiKey(key);
+  if (result.ok) box.className = "error-box good";
+  box.textContent = result.message;
+};
+
+/* キーが使えるかを確かめる（設定画面と「はじめに」の両方から使う） */
+async function checkApiKey(key) {
   const model = resolveModel();
 
   try {
@@ -1655,18 +1860,17 @@ document.getElementById("btnTestKey").onclick = async () => {
     );
     const data = await res.json().catch(() => null);
 
-    if (res.ok) {
-      box.className = "error-box good";
-      box.textContent = "OK。モデル「" + model + "」が使えます。";
-    } else {
-      box.textContent =
-        "使えませんでした。\n\n" +
-        ((data && data.error && data.error.message) || "HTTP " + res.status);
-    }
+    if (res.ok) return { ok: true, message: "OK。モデル「" + model + "」が使えます。" };
+    return {
+      ok: false,
+      message:
+        "使えませんでした。キーを貼り間違えていないか確認してください。\n\n" +
+        ((data && data.error && data.error.message) || "HTTP " + res.status),
+    };
   } catch (e) {
-    box.textContent = "通信できませんでした。ネットワークの状態を確認してください。";
+    return { ok: false, message: "通信できませんでした。ネットワークの状態を確認してください。" };
   }
-};
+}
 
 /* ---------- モデル一覧の取り直し ---------- */
 
@@ -1718,7 +1922,7 @@ document.getElementById("btnExport").onclick = () => {
 
 /* ---------- 起動 ---------- */
 
-/* パスワードマネージャーが歩数やカロリーの欄にまで反応してしまうのを抑える。
+/* パスワードマネージャーがカロリーなどの欄にまで反応してしまうのを抑える。
    HTMLの autocomplete="off" と合わせ、主要なマネージャーの無効化属性も付けておく。 */
 document.querySelectorAll("input:not([type=file]), select").forEach((el) => {
   el.setAttribute("autocomplete", "off");

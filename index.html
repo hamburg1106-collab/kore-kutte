@@ -38,7 +38,7 @@
   <p class="store-warn" id="storeWarn" hidden></p>
 
   <button class="reminder" id="reminder" hidden>
-    🌙 寝る前に、今日の消費エネルギーを入れて締めよう
+    🌙 寝る前に、今日の消費カロリーを入れて締めよう
   </button>
 
   <!-- 主役：あと何kcal食べられるか -->
@@ -57,22 +57,23 @@
     <p class="hero-sub" id="remainSub"></p>
   </section>
 
-  <!-- 歩数と消費。タップするとその場で入力できる -->
+  <!-- 消費カロリー。タップするとその場で入力できる -->
   <div class="chips">
-    <button class="chip" id="chipSteps">
-      <span class="chip-top"><span class="chip-icon" aria-hidden="true">👟</span>歩数</span>
-      <span class="chip-val"><b id="chipStepsVal">—</b></span>
-      <span class="chip-sub" id="chipStepsSub">タップで入力</span>
-    </button>
     <button class="chip" id="chipBurn">
-      <span class="chip-top"><span class="chip-icon" aria-hidden="true">🔥</span>消費</span>
+      <span class="chip-top"><span class="chip-icon" aria-hidden="true">🔥</span>消費カロリー</span>
       <span class="chip-val"><b id="chipBurnVal">—</b><small>kcal</small></span>
       <span class="chip-sub" id="chipBurnSub">タップで入力</span>
     </button>
   </div>
 
-  <!-- 写真で判定（今日を表示しているときだけ） -->
+  <!-- 写真で判定（今日を表示しているときだけ）。
+       APIキーが無いときは、写真の代わりにカロリーを入れて判定するボタンを出す -->
   <div class="shoot-area" id="shootArea">
+    <button class="shoot-btn" id="askBtn" hidden>
+      <span class="shoot-icon" aria-hidden="true">🍙</span>
+      <span class="shoot-text">これ食っていい？</span>
+      <span class="shoot-hint">食べたいもののカロリーを入れて判定</span>
+    </button>
     <label class="shoot-btn" id="shootBtn">
       <input type="file" accept="image/*" capture="environment" id="photoInput" hidden>
       <span class="shoot-icon" aria-hidden="true">📷</span>
@@ -128,26 +129,120 @@
 
 </div>
 
-<!-- ========== 運動・消費の入力（下から出てくる） ========== -->
+<!-- ========== 消費カロリーの入力（下から出てくる） ========== -->
 <div class="overlay sheet" id="burnSheet" hidden>
   <div class="sheet-card" role="dialog" aria-labelledby="burnSheetTitle">
-    <h3 id="burnSheetTitle">今日の運動・消費</h3>
-    <label>歩数
-      <input type="number" id="inSteps" inputmode="numeric" placeholder="例 6000" autocomplete="off">
-    </label>
-    <label>Googleヘルスの消費エネルギー(kcal)
+    <h3 id="burnSheetTitle">今日の消費カロリー</h3>
+    <label><span id="inActiveLabel">消費カロリーの合計(kcal)</span>
       <input type="number" id="inActive" inputmode="numeric" placeholder="寝る前に入れると正確" autocomplete="off">
       <span class="updated-at" id="activeUpdated"></span>
     </label>
     <p class="hint">
-      Googleヘルス（Fit）の「消費エネルギー」をそのまま入れてください。
+      <span id="burnHowTo"></span>
       日中の数字はまだ途中なので、<strong>寝る前に入れ直すと一番正確</strong>です。
-      入れなくても、基礎代謝と歩数からの見込みで計算します。
+      入れなくても、基礎代謝とふだんの活動量からの見込みで計算します。
     </p>
     <div class="sheet-actions">
       <button class="btn-sub" id="burnCancel">閉じる</button>
       <button class="btn-eat" id="burnSave">保存</button>
     </div>
+  </div>
+</div>
+
+<!-- ========== はじめての設定（全画面・1問ずつ） ==========
+     身長などが空のまま初めて開いたときに出す。⚙ の設定と同じ値を書き込む -->
+<div class="overlay panel" id="welcomePanel" hidden>
+  <div class="panel-inner">
+    <header class="panel-head">
+      <h2>はじめに <span class="step-count" id="welcomeCount">1 / 4</span></h2>
+      <button class="btn-link" id="welcomeClose">あとで</button>
+    </header>
+
+    <section class="welcome-step" data-step="1">
+      <p class="welcome-lead">食べる前に撮るだけで、今日の残りカロリーと比べて<br>「食っていい／半分にしとけ／やめとけ」を答えます。</p>
+      <h3 class="sec-title">まず、からだの情報を教えてください</h3>
+      <div class="form-grid">
+        <label>身長(cm)<input type="number" id="wHeight" inputmode="decimal" placeholder="170"></label>
+        <label>体重(kg)<input type="number" id="wWeight" inputmode="decimal" placeholder="65"></label>
+        <label>年齢<input type="number" id="wAge" inputmode="numeric" placeholder="35"></label>
+        <label>性別
+          <select id="wSex">
+            <option value="male">男性</option>
+            <option value="female">女性</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint welcome-note">1日に使うカロリーの計算にだけ使います。</p>
+      <button class="btn-eat welcome-next" data-next="2">次へ</button>
+      <button class="btn-link" id="welcomeTransfer">機種変更で、前のスマホの記録を引き継ぐ</button>
+    </section>
+
+    <section class="welcome-step" data-step="2" hidden>
+      <h3 class="sec-title">ふだんの活動量</h3>
+      <label class="wide">
+        <select id="wActivity">
+          <option value="1.2">ほぼ座っている（デスクワーク中心）</option>
+          <option value="1.375">軽い運動を週1〜3回</option>
+          <option value="1.55">中程度の運動を週3〜5回</option>
+          <option value="1.725">激しい運動を週6〜7回</option>
+        </select>
+      </label>
+      <h3 class="sec-title">目標</h3>
+      <label class="wide">
+        <select id="wGoal">
+          <option value="keep">体重を維持したい</option>
+          <option value="diet">やせたい（1日 −300kcal）</option>
+          <option value="diet500">しっかりやせたい（1日 −500kcal）</option>
+          <option value="gain">増やしたい（1日 +300kcal）</option>
+        </select>
+      </label>
+      <div class="welcome-nav">
+        <button class="btn-sub" data-back="1">戻る</button>
+        <button class="btn-eat welcome-next" data-next="3">次へ</button>
+      </div>
+    </section>
+
+    <section class="welcome-step" data-step="3" hidden>
+      <h3 class="sec-title">スマホはどちらですか？</h3>
+      <p class="hint">消費カロリーの数字をどこから入れるかが変わります。</p>
+      <div class="choice-list">
+        <button class="choice" data-burn-mode="total">
+          <b>Android</b>
+          <span>Googleヘルス・Fitbitなどの「消費カロリー（合計）」を入れる</span>
+        </button>
+        <button class="choice" data-burn-mode="active">
+          <b>iPhone</b>
+          <span>ヘルスケアの「アクティブエネルギー」を入れる（基礎代謝はアプリが足します）</span>
+        </button>
+      </div>
+      <p class="hint">入れなくても、ふだんの活動量からの見込みで計算します。あとで ⚙ から変えられます。</p>
+      <div class="welcome-nav">
+        <button class="btn-sub" data-back="2">戻る</button>
+      </div>
+    </section>
+
+    <section class="welcome-step" data-step="4" hidden>
+      <h3 class="sec-title">写真で判定する準備（あとでもOK）</h3>
+      <p class="welcome-lead">写真判定にはGoogleの「Gemini APIキー」が要ります。<br><b>キーが無くても、カロリーを手で入れれば判定できます。</b></p>
+      <ol class="guide-steps">
+        <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> を開いて、Googleアカウントでログイン</li>
+        <li>「APIキーを作成」（Create API key）を押す</li>
+        <li>出てきた <b>AIza…</b> で始まる文字をコピーして、下に貼る</li>
+      </ol>
+      <label class="wide">Gemini APIキー
+        <input type="text" class="key-input" id="wApiKey" inputmode="text" placeholder="AIza… から始まる文字列">
+      </label>
+      <p class="hint">
+        無料・クレジットカード登録不要。キーはこのスマホの中だけに保存され、どこにも送信・同期されません。
+        無料枠では、送った写真がGoogleのサービス改善に使われることがあります。
+      </p>
+      <div class="error-box" id="wKeyResult" hidden></div>
+      <button class="btn-eat welcome-full" id="welcomeWithKey">キーを確認してはじめる</button>
+      <div class="welcome-nav">
+        <button class="btn-sub" data-back="3">戻る</button>
+        <button class="btn-sub" id="welcomeNoKey">キーなしではじめる</button>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -193,14 +288,33 @@
       <div>1日の消費の目安 <strong id="showTdee">—</strong> kcal</div>
     </div>
 
+    <h3 class="sec-title">消費カロリーの入れ方</h3>
+    <label class="wide">
+      <select id="inBurnMode">
+        <option value="total">合計を入れる（Android）</option>
+        <option value="active">動いた分だけ入れる（iPhone）</option>
+      </select>
+    </label>
+
     <h3 class="sec-title">写真判定</h3>
     <label class="wide">Gemini APIキー
-      <input type="text" id="inApiKey" inputmode="text" placeholder="AIza… から始まる文字列" autocomplete="off">
+      <input type="text" class="key-input" id="inApiKey" inputmode="text" placeholder="AIza… から始まる文字列" autocomplete="off">
     </label>
     <p class="hint">
-      Google AI Studio（クレジットカード登録不要）で無料で取れます。
+      キーが無くても、カロリーを手で入れれば判定できます。
       <strong>このキーはこの端末の中だけに保存され、どこにも送信・同期されません。</strong>
     </p>
+    <details class="fold key-guide">
+      <summary>キーの取り方（無料・3分）</summary>
+      <ol class="guide-steps">
+        <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> を開いて、Googleアカウントでログイン</li>
+        <li>「APIキーを作成」（Create API key）を押す</li>
+        <li>出てきた <b>AIza…</b> で始まる文字をコピーして、上の欄に貼る</li>
+      </ol>
+      <p class="hint">
+        クレジットカードの登録は不要です。無料枠では、送った写真がGoogleのサービス改善に使われることがあります。
+      </p>
+    </details>
     <label class="wide">使うモデル
       <select id="inModel">
         <option value="auto">自動（安定して返るFlashを使う）</option>
