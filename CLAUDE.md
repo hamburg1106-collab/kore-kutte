@@ -29,6 +29,10 @@ Vite構成なので、置き場所を間違えると公開時に消える。
 | 場所 | 中身 |
 |---|---|
 | `src/main.js` | アプリ本体。CSSもここからimportしている |
+| `src/foods.js` | 食品検索（キーなしでもkcal・PFCを入れるため） |
+| `src/suggest.js` | 次の食事のおすすめ（AIなし版）と1週間の傾向 |
+| `src/data/` | 食品成分表から作ったデータ。**手で直さず** `tools/build-foods.cjs` で作り直す |
+| `tools/build-foods.cjs` | 文部科学省の食品成分表Excel → `src/data/` を作る。よく食べるもの・献立の一覧もここ |
 | `src/style.css` | 見た目 |
 | `public/` | そのまま配信されるもの（`sw.js` / `manifest.json` / アイコン） |
 | `index.html` | 画面の骨格 |

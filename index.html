@@ -55,6 +55,26 @@
       </div>
     </div>
     <p class="hero-sub" id="remainSub"></p>
+
+    <!-- 栄養バランス（PFC）。目標は今日の目標kcalを P20%・F25%・C55% に分けたもの -->
+    <div class="pfc" id="pfc" hidden>
+      <div class="pfc-row" data-k="protein">
+        <span class="pfc-name">たんぱく質</span>
+        <span class="pfc-bar"><i></i></span>
+        <span class="pfc-val"></span>
+      </div>
+      <div class="pfc-row" data-k="fat">
+        <span class="pfc-name">脂質</span>
+        <span class="pfc-bar"><i></i></span>
+        <span class="pfc-val"></span>
+      </div>
+      <div class="pfc-row" data-k="carbs">
+        <span class="pfc-name">炭水化物</span>
+        <span class="pfc-bar"><i></i></span>
+        <span class="pfc-val"></span>
+      </div>
+      <p class="pfc-note" id="pfcNote" hidden></p>
+    </div>
   </section>
 
   <!-- 消費カロリー。タップするとその場で入力できる -->
@@ -100,13 +120,44 @@
       <div class="verdict-portion" id="verdictPortion"></div>
     </div>
     <div class="verdict-kcal"><span id="verdictKcal"></span><span class="unit">kcal</span></div>
+    <div class="verdict-pfc" id="verdictPfc"></div>
     <div class="verdict-note" id="verdictNote"></div>
     <div class="verdict-actions">
       <button class="btn-eat" id="btnEat">食べた！記録する</button>
       <button class="btn-skip" id="btnSkip">やめた</button>
     </div>
-    <button class="btn-link" id="btnFixKcal">カロリーを手で直す</button>
+    <button class="btn-link" id="btnFixKcal">カロリー・PFCを手で直す</button>
   </div>
+
+  <!-- 次の食事のおすすめ（今日を表示しているときだけ）。
+       ふだんはAIなしで選んだ献立、AIが使えるときはAIの提案も出す -->
+  <section class="block" id="suggest" hidden>
+    <div class="block-head">
+      <h2 id="suggestTitle">次の食事のおすすめ</h2>
+    </div>
+    <div class="suggest-card">
+      <!-- どの食事のおすすめか。ふだんは時刻から自動で選び、違っていたら押して変える -->
+      <div class="slot-tabs" id="slotTabs" role="group" aria-label="どの食事か">
+        <button type="button" data-slot="朝">朝</button>
+        <button type="button" data-slot="昼">昼</button>
+        <button type="button" data-slot="夜">夜</button>
+        <button type="button" data-slot="間食">間食</button>
+      </div>
+      <ul class="suggest-advice" id="suggestAdvice"></ul>
+      <ul class="suggest-menus" id="suggestMenus"></ul>
+      <p class="hint suggest-note">押すと「これ食っていい？」で判定できます。数値は食品成分表からの目安（油・調味料は含みません）。</p>
+
+      <div class="suggest-ai" id="suggestAi" hidden>
+        <div class="suggest-ai-head">
+          <b>AIの提案</b>
+          <button class="btn-link" id="btnAiSuggest">AIに提案してもらう</button>
+        </div>
+        <p class="suggest-ai-status" id="aiStatus" hidden></p>
+        <p class="suggest-ai-advice" id="aiAdvice" hidden></p>
+        <ul class="suggest-menus" id="aiMenus"></ul>
+      </div>
+    </div>
+  </section>
 
   <!-- 食べたもの -->
   <section class="block">
@@ -344,6 +395,11 @@
       </div>
       <button class="btn-sub" id="btnExport">バックアップを書き出す</button>
     </details>
+
+    <p class="hint credit">
+      食品検索の数値：文部科学省「日本食品標準成分表（八訂）増補2023年」をもとに計算（1回分の量は目安）。
+      栄養バランスの目標は、目標カロリーを たんぱく質20%・脂質25%・炭水化物55% に分けたものです。
+    </p>
   </div>
 </div>
 
@@ -351,9 +407,28 @@
 <div class="overlay modal" id="modal" hidden>
   <div class="modal-card" role="dialog" aria-labelledby="modalTitle">
     <h3 id="modalTitle">手入力で追加</h3>
+
+    <!-- 食品成分表から探して、カロリーとPFCを入れる -->
+    <label>食品をさがす
+      <input type="text" id="mSearch" placeholder="例 ごはん、鶏むね、ビール" autocomplete="off">
+    </label>
+    <ul class="food-results" id="mResults" hidden></ul>
+    <div class="food-amount" id="mAmountRow" hidden>
+      <span id="mAmountUnit"></span>
+      <span class="food-times" id="mAmountTimes">×</span>
+      <input type="number" id="mAmount" inputmode="decimal" autocomplete="off">
+      <span id="mAmountSuffix"></span>
+    </div>
+
     <label>食べたもの<input type="text" id="mName" placeholder="例 ポテトチップス" autocomplete="off"></label>
     <label>量<input type="text" id="mPortion" placeholder="例 1袋 60g" autocomplete="off"></label>
     <label>カロリー(kcal)<input type="number" id="mKcal" inputmode="numeric" placeholder="335" autocomplete="off"></label>
+    <div class="pfc-inputs">
+      <label>たんぱく質(g)<input type="number" id="mProtein" inputmode="decimal" autocomplete="off"></label>
+      <label>脂質(g)<input type="number" id="mFat" inputmode="decimal" autocomplete="off"></label>
+      <label>炭水化物(g)<input type="number" id="mCarbs" inputmode="decimal" autocomplete="off"></label>
+    </div>
+    <p class="hint" id="mSource">PFCがわからなければ空のままでOKです。</p>
     <div class="modal-actions">
       <button class="btn-sub" id="mCancel">キャンセル</button>
       <button class="btn-eat" id="mOk">決定</button>

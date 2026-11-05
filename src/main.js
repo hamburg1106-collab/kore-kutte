@@ -14,6 +14,9 @@ import "./style.css";
 import firebase from "firebase/compat/app";
 import "firebase/compat/firestore";
 
+import { loadFoods, searchFoods } from "./foods.js";
+import { nextSlot, buildSuggestion, weekTrend, trendText, SLOT_LABEL } from "./suggest.js";
+
 /* 一覧が取れていないときに使うモデル。
    最新ではなく一世代前を既定にする（理由は resolveModel のコメント） */
 const DEFAULT_MODEL = "gemini-3.5-flash";
@@ -614,6 +617,54 @@ function calcRemain(key) {
   return calcBurn(key) - calcIntake(key) - (GOAL_DIFF[state.profile.goal] || 0);
 }
 
+/* ---------- 栄養バランス（PFC） ----------
+   目標は、その日の目標kcalを次の割合で分けてグラムに直したもの。
+   ダイエット中は筋肉を落とさないよう、たんぱく質を多めにしている */
+const PFC_RATIO = { protein: 0.2, fat: 0.25, carbs: 0.55 };
+const KCAL_PER_G = { protein: 4, fat: 9, carbs: 4 };
+const PFC_KEYS = ["protein", "fat", "carbs"];
+const PFC_SHORT = { protein: "P", fat: "F", carbs: "C" };
+
+/* 記録のPFC。昔の記録や、わからず空にした記録は null（＝不明）を返す */
+function pfcOf(m) {
+  if (PFC_KEYS.some((k) => m[k] === null || m[k] === undefined || m[k] === "")) return null;
+  return { protein: Number(m.protein), fat: Number(m.fat), carbs: Number(m.carbs) };
+}
+
+function calcPfcTarget(key) {
+  const t = Math.max(0, calcTarget(key));
+  const out = {};
+  PFC_KEYS.forEach((k) => (out[k] = Math.round((t * PFC_RATIO[k]) / KCAL_PER_G[k])));
+  return out;
+}
+
+/* その日に食べたPFCの合計と、PFCが不明な記録の件数 */
+function calcPfcIntake(key) {
+  const sum = { protein: 0, fat: 0, carbs: 0 };
+  let unknown = 0;
+  mealsOf(key).forEach((m) => {
+    const p = pfcOf(m);
+    if (!p) {
+      unknown++;
+      return;
+    }
+    PFC_KEYS.forEach((k) => (sum[k] += p[k]));
+  });
+  return { sum, unknown };
+}
+
+/* グラムの値をそろえる。空や数字でないものは null（＝不明）にする */
+function gramOf(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return isFinite(n) && n >= 0 ? Math.round(n * 10) / 10 : null;
+}
+
+/* 「P 12g ・ F 8g ・ C 40g」のような短い表記 */
+function pfcText(p, sep) {
+  return PFC_KEYS.map((k) => PFC_SHORT[k] + " " + Math.round(p[k]) + "g").join(sep || " ・ ");
+}
+
 /* 食べていいかの判定 */
 function decide(kcal, remain) {
   if (remain <= 0) return "stop";
@@ -634,8 +685,10 @@ const VERDICT_TEXT = {
 function renderAll() {
   renderHeader();
   renderHero();
+  renderPfc();
   renderChips();
   renderShootArea();
+  renderSuggest();
   renderMealList();
   renderWeek();
   renderBmrBox();
@@ -743,6 +796,44 @@ function renderHero() {
     (target > 0 ? " ・ " + Math.round(ratio * 100) + "%" : "");
 }
 
+/* リングの下のPFCの棒。たんぱく質は「届いたか」、脂質・炭水化物は「超えていないか」を見る */
+function renderPfc() {
+  const box = document.getElementById("pfc");
+  const key = state.viewDate;
+  if (!calcBmr(state.profile)) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+
+  const target = calcPfcTarget(key);
+  const { sum, unknown } = calcPfcIntake(key);
+
+  PFC_KEYS.forEach((k) => {
+    const row = box.querySelector('[data-k="' + k + '"]');
+    const got = Math.round(sum[k]);
+    const goal = target[k];
+    const rate = goal > 0 ? got / goal : 0;
+    const good = k === "protein" && rate >= 1;
+    const over = k !== "protein" && rate > 1;
+
+    row.classList.toggle("good", good);
+    row.classList.toggle("over", over);
+    row.querySelector(".pfc-bar i").style.width = Math.min(100, rate * 100) + "%";
+
+    const val = row.querySelector(".pfc-val");
+    val.textContent = "";
+    const b = document.createElement("b");
+    b.textContent = got;
+    val.appendChild(b);
+    val.append(" / " + goal + "g" + (good ? " 達成" : over ? " 多め" : ""));
+  });
+
+  const note = document.getElementById("pfcNote");
+  note.hidden = unknown === 0;
+  note.textContent = "※ PFCがわからない記録が " + unknown + " 件あり、その分は入っていません";
+}
+
 /* 消費カロリーのチップ。押すと入力シートが開く */
 function renderChips() {
   const key = state.viewDate;
@@ -794,6 +885,129 @@ function renderShootArea() {
   } else {
     hint.hidden = true;
   }
+}
+
+/* ---------- 次の食事のおすすめ ---------- */
+
+/* どの食事のおすすめを出すか。押して選んだらそれ、選んでいなければ時刻から決める。
+   選んだものは、食事を記録したときと日付が変わったときに自動に戻す */
+let pickedSlot = null;
+
+function currentSlot() {
+  if (pickedSlot) return pickedSlot;
+  const last = mealsOf(todayKey()).reduce((t, m) => (m.createdAt && m.createdAt > t ? m.createdAt : t), "");
+  return nextSlot(new Date(), last ? new Date(last) : null);
+}
+
+document.querySelectorAll("#slotTabs [data-slot]").forEach((btn) => {
+  btn.onclick = () => {
+    pickedSlot = btn.dataset.slot;
+    renderSuggest();
+  };
+});
+
+/* 今日の記録から、次の食事のおすすめ（AIなし版）を作る */
+function currentSuggestion() {
+  const key = todayKey();
+  return buildSuggestion({
+    remain: calcRemain(key),
+    dayTarget: calcTarget(key),
+    target: calcPfcTarget(key),
+    intake: calcPfcIntake(key).sum,
+    slot: currentSlot(),
+  });
+}
+
+/* 直近7日（今日を除く）の、日ごとのPFC合計。PFCのわかる記録が無い日は null */
+function calcWeekTrend() {
+  const days = [];
+  for (let i = 1; i <= 7; i++) {
+    const list = mealsOf(shiftKey(todayKey(), -i)).map(pfcOf).filter(Boolean);
+    if (!list.length) {
+      days.push(null);
+      continue;
+    }
+    const sum = { protein: 0, fat: 0, carbs: 0 };
+    list.forEach((p) => PFC_KEYS.forEach((k) => (sum[k] += p[k])));
+    days.push(sum);
+  }
+  return weekTrend(days, PFC_RATIO);
+}
+
+function suggestTitle(s) {
+  if (s.over) return "このあと食べるなら";
+  return s.slot === "間食" ? "間食・夜食のおすすめ" : "次の" + SLOT_LABEL[s.slot] + "のおすすめ";
+}
+
+/* 献立1つ分の行。押すと、その数字で「これ食っていい？」を開く */
+function menuItem(m) {
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.type = "button";
+
+  const place = document.createElement("span");
+  place.className = "menu-place";
+  place.textContent = m.place;
+
+  const name = document.createElement("span");
+  name.className = "menu-name";
+  name.textContent = m.name;
+  const sub = document.createElement("small");
+  sub.textContent = (m.detail ? m.detail + "　" : "") + pfcText(m, " ");
+  name.appendChild(sub);
+
+  const kcal = document.createElement("span");
+  kcal.className = "menu-kcal";
+  kcal.textContent = m.kcal.toLocaleString() + "kcal";
+
+  btn.append(place, name, kcal);
+  btn.onclick = () =>
+    openJudge({
+      name: m.name,
+      portion: m.place + "の目安",
+      kcal: m.kcal,
+      protein: m.protein,
+      fat: m.fat,
+      carbs: m.carbs,
+    });
+  li.appendChild(btn);
+  return li;
+}
+
+function renderSuggest() {
+  const box = document.getElementById("suggest");
+  if (state.viewDate !== todayKey() || !calcBmr(state.profile)) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+
+  const s = currentSuggestion();
+  document.getElementById("suggestTitle").textContent = suggestTitle(s);
+  document.querySelectorAll("#slotTabs [data-slot]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", String(btn.dataset.slot === s.slot));
+  });
+
+  const advice = document.getElementById("suggestAdvice");
+  advice.innerHTML = "";
+  s.advice.forEach((t) => {
+    const li = document.createElement("li");
+    li.textContent = t;
+    advice.appendChild(li);
+  });
+  const trend = trendText(calcWeekTrend());
+  if (trend) {
+    const li = document.createElement("li");
+    li.className = "trend";
+    li.textContent = trend;
+    advice.appendChild(li);
+  }
+
+  const ul = document.getElementById("suggestMenus");
+  ul.innerHTML = "";
+  s.menus.forEach((m) => ul.appendChild(menuItem(m)));
+
+  renderAiSuggest();
 }
 
 function renderMealList() {
@@ -852,6 +1066,14 @@ function renderMealList() {
       portion.className = "meal-portion";
       portion.textContent = m.portion;
       body.appendChild(portion);
+    }
+
+    const pfc = pfcOf(m);
+    if (pfc) {
+      const line = document.createElement("div");
+      line.className = "meal-pfc";
+      line.textContent = pfcText(pfc, " ");
+      body.appendChild(line);
     }
 
     li.appendChild(body);
@@ -1449,6 +1671,7 @@ const JUDGE_PROMPT = `この写真に写っている食べ物・飲み物を判�
 - calories には「写真に写っている量ぜんぶ」の合計カロリーを入れてください。100gあたりの値ではありません。
 - name は25文字以内で簡潔に。おかずが何品もある食事は品名を並べず「鶏ソテー定食」のようにまとめて呼んでください。
 - portion には「1袋 60g」「茶碗1杯 150g」のように、写っている量を書いてください。品数が多い食事は、ここに中身を書いてください。
+- protein_g・fat_g・carbs_g には、写っている量ぜんぶの たんぱく質・脂質・炭水化物 をグラムで入れてください。栄養成分表示があればその値を使ってください。
 - 食べ物でも飲み物でもない写真なら is_food を false にしてください。
 - note には、どうやってカロリーを見積もったかを1文で簡潔に書いてください。`;
 
@@ -1459,10 +1682,13 @@ const RESPONSE_SCHEMA = {
     name: { type: "STRING" },
     portion: { type: "STRING" },
     calories: { type: "INTEGER" },
+    protein_g: { type: "NUMBER" },
+    fat_g: { type: "NUMBER" },
+    carbs_g: { type: "NUMBER" },
     confidence: { type: "STRING", enum: ["high", "medium", "low"] },
     note: { type: "STRING" },
   },
-  required: ["is_food", "name", "portion", "calories", "confidence", "note"],
+  required: ["is_food", "name", "portion", "calories", "protein_g", "fat_g", "carbs_g", "confidence", "note"],
 };
 
 /* 混雑・一時障害。待てば直るので投げ返さずに試し直す */
@@ -1505,36 +1731,44 @@ function parseJudgement(data) {
    間を空けて試し直し、最後の1回は別のモデルへ逃がす。
    キーの誤りと使いすぎは待っても直らないので、その場で理由を出して止める。 */
 async function askGemini(base64) {
+  const judgingText = document.getElementById("judgingText");
+  judgingText.textContent = "判定中…";
+
+  return callGemini(
+    [
+      { inline_data: { mime_type: "image/jpeg", data: base64 } },
+      { text: JUDGE_PROMPT },
+    ],
+    RESPONSE_SCHEMA,
+    (n, total) => {
+      // 黙って数秒止まると壊れたように見えるので、試し直していることを出す
+      judgingText.textContent = "混み合っています。もう一度試しています（" + n + "/" + total + "）";
+    }
+  );
+}
+
+/* Geminiに頼んで、決めた形（schema）のJSONで答えをもらう。
+   写真判定と「次の食事のおすすめ」の両方から使う */
+async function callGemini(parts, schema, onRetry) {
   const key = getApiKey();
   if (!key) {
     throw new Error("右上の ⚙ 設定で Gemini APIキーを入れてください。");
   }
 
   const body = {
-    contents: [
-      {
-        parts: [
-          { inline_data: { mime_type: "image/jpeg", data: base64 } },
-          { text: JUDGE_PROMPT },
-        ],
-      },
-    ],
+    contents: [{ parts: parts }],
     generationConfig: {
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: schema,
     },
   };
 
   const models = [resolveModel(), resolveModel(), fallbackModel()];
   let lastError = null;
 
-  const judgingText = document.getElementById("judgingText");
-  judgingText.textContent = "判定中…";
-
   for (let i = 0; i < models.length; i++) {
     if (i > 0) {
-      // 黙って数秒止まると壊れたように見えるので、試し直していることを出す
-      judgingText.textContent = "混み合っています。もう一度試しています（" + (i + 1) + "/" + models.length + "）";
+      if (onRetry) onRetry(i + 1, models.length);
       await sleep(BACKOFF_MS[i - 1]);
     }
 
@@ -1589,6 +1823,178 @@ async function askGemini(base64) {
   throw lastError || new Error("判定に失敗しました。もう一度試してください。");
 }
 
+/* ---------- 次の食事のおすすめ（AI版） ----------
+   AIが使えるときだけ出す。無料枠を使いすぎないよう、
+   食事を記録した直後に1回だけ作って端末に取っておき、画面を開くたびには呼ばない。
+   作り直すのは「別の案」を押したときだけ */
+
+const AI_SUGGEST_STORAGE = "korekutte_ai_suggest";
+let aiSuggestBusy = false;
+
+const SUGGEST_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    advice: { type: "STRING" },
+    menus: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          place: { type: "STRING", enum: ["コンビニ", "外食", "自炊"] },
+          name: { type: "STRING" },
+          detail: { type: "STRING" },
+          kcal: { type: "INTEGER" },
+          protein_g: { type: "NUMBER" },
+          fat_g: { type: "NUMBER" },
+          carbs_g: { type: "NUMBER" },
+        },
+        required: ["place", "name", "detail", "kcal", "protein_g", "fat_g", "carbs_g"],
+      },
+    },
+  },
+  required: ["advice", "menus"],
+};
+
+function canUseAi() {
+  return !!getApiKey();
+}
+
+/* 今日の記録の「指紋」。記録が増えたり消えたりしたら、取っておいた提案は古い */
+function aiSuggestSig(slot) {
+  const ids = mealsOf(todayKey()).map((m) => m.id + ":" + m.kcal).sort().join(",");
+  return todayKey() + "|" + slot + "|" + ids;
+}
+
+function readAiSuggest() {
+  try {
+    return JSON.parse(localStorage.getItem(AI_SUGGEST_STORAGE) || "null");
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeAiSuggest(v) {
+  try {
+    localStorage.setItem(AI_SUGGEST_STORAGE, JSON.stringify(v));
+  } catch (e) {
+    // 保存できなくても、その場の表示はできるので何もしない
+  }
+}
+
+function renderAiSuggest(statusText) {
+  const box = document.getElementById("suggestAi");
+  box.hidden = !canUseAi();
+  if (box.hidden) return;
+
+  const s = currentSuggestion();
+  const saved = readAiSuggest();
+  const fresh = saved && saved.sig === aiSuggestSig(s.slot);
+
+  const btn = document.getElementById("btnAiSuggest");
+  btn.disabled = aiSuggestBusy;
+  btn.textContent = aiSuggestBusy ? "考え中…" : fresh ? "別の案" : "AIに提案してもらう";
+
+  const status = document.getElementById("aiStatus");
+  status.hidden = !statusText;
+  status.textContent = statusText || "";
+
+  const advice = document.getElementById("aiAdvice");
+  const ul = document.getElementById("aiMenus");
+  ul.innerHTML = "";
+  advice.hidden = !fresh;
+  if (!fresh) return;
+
+  advice.textContent = saved.advice;
+  saved.menus.forEach((m) => ul.appendChild(menuItem(m)));
+}
+
+/* AIに渡す、今日の状況のまとめ */
+function aiSuggestPrompt(s) {
+  const key = todayKey();
+  const target = calcTarget(key);
+  const pt = calcPfcTarget(key);
+  const intake = calcPfcIntake(key).sum;
+  const meals = mealsOf(key).sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+
+  const mealLines = meals.length
+    ? meals
+        .map((m) => {
+          const t = m.createdAt ? new Date(m.createdAt) : null;
+          const time = t ? t.getHours() + ":" + String(t.getMinutes()).padStart(2, "0") + " " : "";
+          const p = pfcOf(m);
+          return "  - " + time + m.name + (m.portion ? "（" + m.portion + "）" : "") + " " + m.kcal + "kcal " +
+            (p ? pfcText(p, " ") : "PFC不明");
+        })
+        .join("\n")
+    : "  - まだ何も食べていない";
+
+  const trend = trendText(calcWeekTrend());
+  const remain = calcRemain(key);
+
+  return [
+    "あなたはダイエット中の人を応援する食事アドバイザーです。今日の記録を見て、" +
+      (s.over ? "このあと食べるならのおすすめ" : "次の" + SLOT_LABEL[s.slot] + "のおすすめ") +
+      "を日本語で提案してください。",
+    "",
+    "- 目標: " + (GOAL_TEXT[state.profile.goal] || "維持"),
+    "- 今日の目標: " + target + "kcal（P " + pt.protein + "g・F " + pt.fat + "g・C " + pt.carbs + "g）",
+    "- 今日食べたもの:",
+    mealLines,
+    "- 食べた合計: " + calcIntake(key) + "kcal（" + pfcText(intake, "・") + "）",
+    s.over
+      ? "- 今日は目標を " + Math.abs(remain) + "kcal 超えている。食べるなら " + s.budget + "kcal 以下"
+      : "- 残り: " + remain + "kcal。次の" + SLOT_LABEL[s.slot] + "の目安は " + s.budget + "kcal",
+    trend ? "- " + trend : "",
+    "",
+    "ルール:",
+    "- コンビニ・外食・自炊から1つずつ、合計3案。日本で手に入りやすい具体的なメニューにする",
+    "- kcal と PFC は1人前の目安。目安のkcalを大きく超えない",
+    "- 足りない栄養素を補い、取りすぎている栄養素は控えめにする",
+    "- name は20文字以内。detail は量や選び方のコツを20文字程度で",
+    "- advice は今日の食事を踏まえた一言を2文以内で。責める言い方はしない",
+  ].join("\n");
+}
+
+async function requestAiSuggest() {
+  if (aiSuggestBusy || !canUseAi()) return;
+  const s = currentSuggestion();
+  aiSuggestBusy = true;
+  renderAiSuggest();
+
+  let status = "";
+  try {
+    const res = await callGemini([{ text: aiSuggestPrompt(s) }], SUGGEST_SCHEMA);
+    writeAiSuggest({
+      sig: aiSuggestSig(s.slot),
+      advice: String(res.advice || ""),
+      menus: (res.menus || []).slice(0, 3).map((m) => ({
+        place: m.place,
+        name: m.name,
+        detail: m.detail,
+        kcal: Math.max(0, Math.round(Number(m.kcal) || 0)),
+        protein: gramOf(m.protein_g) || 0,
+        fat: gramOf(m.fat_g) || 0,
+        carbs: gramOf(m.carbs_g) || 0,
+      })),
+    });
+  } catch (e) {
+    status = "AIの提案を作れませんでした。上のおすすめを参考にしてください。\n" + ((e && e.message) || "");
+  } finally {
+    aiSuggestBusy = false;
+  }
+  renderAiSuggest(status);
+}
+
+document.getElementById("btnAiSuggest").onclick = requestAiSuggest;
+
+/* 今日の食事を記録したあとに呼ぶ。AIが使えるなら、次の提案を1回だけ作っておく */
+function afterMealRecorded(dateKeyRecorded) {
+  if (dateKeyRecorded !== todayKey()) return;
+  pickedSlot = null; // 食べたので、次の食事は時刻から決め直す
+  renderSuggest();
+  if (canUseAi()) requestAiSuggest();
+}
+
 /* ---------- 判定の流れ ---------- */
 
 const photoInput = document.getElementById("photoInput");
@@ -1626,6 +2032,9 @@ photoInput.addEventListener("change", async () => {
       name: food.name,
       portion: food.portion,
       kcal: Math.max(0, Math.round(Number(food.calories) || 0)),
+      protein: gramOf(food.protein_g),
+      fat: gramOf(food.fat_g),
+      carbs: gramOf(food.carbs_g),
       note: food.note,
       confidence: food.confidence,
       thumb: thumb,
@@ -1659,6 +2068,8 @@ function showVerdict() {
   document.getElementById("verdictName").textContent = f.name;
   document.getElementById("verdictPortion").textContent = f.portion || "";
   document.getElementById("verdictKcal").textContent = f.kcal.toLocaleString();
+  const pfc = pfcOf(f);
+  document.getElementById("verdictPfc").textContent = pfc ? pfcText(pfc) : "";
 
   let note = f.note || "";
   if (f.confidence === "low") note += "（推定の確からしさは低めです）";
@@ -1692,6 +2103,9 @@ btnEat.onclick = async () => {
       name: f.name,
       portion: f.portion || "",
       kcal: f.kcal,
+      protein: gramOf(f.protein),
+      fat: gramOf(f.fat),
+      carbs: gramOf(f.carbs),
       thumb: f.thumb || "",
       createdAt: new Date().toISOString(),
     });
@@ -1713,6 +2127,7 @@ btnEat.onclick = async () => {
       ? "記録しました　残り " + remain.toLocaleString() + " kcal"
       : "記録しました　今日はオーバーしています"
   );
+  afterMealRecorded(todayKey());
 };
 
 document.getElementById("btnSkip").onclick = () => {
@@ -1724,7 +2139,7 @@ document.getElementById("btnSkip").onclick = () => {
 document.getElementById("btnFixKcal").onclick = () => {
   const f = state.pending;
   if (!f) return;
-  openModal("カロリーを直す", f, (edited) => {
+  openModal("カロリー・PFCを直す", f, (edited) => {
     Object.assign(state.pending, edited);
     showVerdict();
   });
@@ -1735,16 +2150,132 @@ document.getElementById("btnFixKcal").onclick = () => {
 const modal = document.getElementById("modal");
 let modalCallback = null;
 
+const PFC_INPUTS = { protein: "mProtein", fat: "mFat", carbs: "mCarbs" };
+
 function openModal(title, initial, onOk, okLabel) {
   document.getElementById("modalTitle").textContent = title;
   document.getElementById("mOk").textContent = okLabel || "決定";
   document.getElementById("mName").value = (initial && initial.name) || "";
   document.getElementById("mPortion").value = (initial && initial.portion) || "";
   document.getElementById("mKcal").value = (initial && initial.kcal) || "";
+  PFC_KEYS.forEach((k) => {
+    const v = initial ? initial[k] : null;
+    document.getElementById(PFC_INPUTS[k]).value = v === null || v === undefined ? "" : v;
+  });
+  resetFoodSearch();
   modalCallback = onOk;
   openOverlay(modal);
-  setTimeout(() => document.getElementById("mName").focus(), 100);
+  // 新しく入れるときは食品検索から、直すときはカロリーから
+  setTimeout(() => document.getElementById(initial ? "mKcal" : "mSearch").focus(), 100);
 }
+
+/* ---------- 食品検索（ダイアログの中） ----------
+   選ぶと、名前・量・カロリー・PFCがまとめて入る。量を変えると数字も追従する。
+   入ったあとに手で直すのも自由 */
+
+const searchInput = document.getElementById("mSearch");
+const resultsEl = document.getElementById("mResults");
+const amountRow = document.getElementById("mAmountRow");
+const amountInput = document.getElementById("mAmount");
+let pickedFood = null;
+let searchTimer = null;
+
+function resetFoodSearch() {
+  searchInput.value = "";
+  resultsEl.hidden = true;
+  resultsEl.innerHTML = "";
+  amountRow.hidden = true;
+  pickedFood = null;
+}
+
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runFoodSearch, 150);
+});
+
+async function runFoodSearch() {
+  const q = searchInput.value.trim();
+  if (!q) {
+    resultsEl.hidden = true;
+    return;
+  }
+  try {
+    await loadFoods();
+  } catch (e) {
+    resultsEl.innerHTML = '<li class="food-none">食品データを読み込めませんでした。電波の良いところで開き直してください。</li>';
+    resultsEl.hidden = false;
+    return;
+  }
+  if (searchInput.value.trim() !== q) return; // 読み込み中に打ち変えられた
+
+  const hits = searchFoods(q);
+  resultsEl.innerHTML = "";
+  if (!hits.length) {
+    const li = document.createElement("li");
+    li.className = "food-none";
+    li.textContent = "見つかりませんでした。別の言い方で探すか、下に手で入れてください。";
+    resultsEl.appendChild(li);
+  }
+  hits.forEach((f) => {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+
+    const label = document.createElement("span");
+    label.textContent = f.name;
+    const sub = document.createElement("small");
+    sub.textContent = f.kind === "common" ? f.unit : "成分表（100gあたり）";
+    label.appendChild(sub);
+
+    const kcal = document.createElement("span");
+    kcal.className = "food-kcal";
+    kcal.textContent = f.kcal + "kcal";
+
+    btn.append(label, kcal);
+    btn.onclick = () => pickFood(f);
+    li.appendChild(btn);
+    resultsEl.appendChild(li);
+  });
+  resultsEl.hidden = false;
+}
+
+function pickFood(f) {
+  pickedFood = f;
+  resultsEl.hidden = true;
+  searchInput.value = f.name;
+
+  // よく食べるものは「1回分 × 何回分」、成分表の食品は「何グラム」で量を決める
+  const common = f.kind === "common";
+  document.getElementById("mAmountUnit").textContent = common ? f.unit : "";
+  document.getElementById("mAmountTimes").hidden = !common;
+  document.getElementById("mAmountSuffix").textContent = common ? "人前・個" : "g";
+  amountInput.value = common ? 1 : 100;
+  amountRow.hidden = false;
+  applyFoodAmount();
+}
+
+function applyFoodAmount() {
+  const f = pickedFood;
+  if (!f) return;
+  const amount = Number(amountInput.value) || 0;
+  const common = f.kind === "common";
+  const factor = common ? amount : amount / 100;
+
+  document.getElementById("mName").value = f.name;
+  // 「100g」のようにグラムだけの1回分は、×1.5 ではなく 150g と書く
+  const unitGram = common && /^(\d+)g$/.exec(f.unit);
+  document.getElementById("mPortion").value = !common
+    ? amount + "g"
+    : unitGram
+    ? Math.round(Number(unitGram[1]) * amount) + "g"
+    : f.unit + (amount === 1 ? "" : " ×" + amount);
+  document.getElementById("mKcal").value = Math.round(f.kcal * factor);
+  PFC_KEYS.forEach((k) => {
+    document.getElementById(PFC_INPUTS[k]).value = Math.round(f[k] * factor * 10) / 10;
+  });
+}
+
+amountInput.addEventListener("input", applyFoodAmount);
 
 document.getElementById("mCancel").onclick = () => {
   closeOverlay(modal);
@@ -1766,11 +2297,13 @@ document.getElementById("mOk").onclick = () => {
   closeOverlay(modal);
   modalCallback = null;
   if (cb) {
-    cb({
+    const edited = {
       name: name,
       portion: document.getElementById("mPortion").value.trim(),
       kcal: Math.round(kcal),
-    });
+    };
+    PFC_KEYS.forEach((k) => (edited[k] = gramOf(document.getElementById(PFC_INPUTS[k]).value)));
+    cb(edited);
   }
 };
 
@@ -1783,6 +2316,9 @@ function openManualAdd(dateKeyToUse, title) {
         name: edited.name,
         portion: edited.portion,
         kcal: edited.kcal,
+        protein: edited.protein,
+        fat: edited.fat,
+        carbs: edited.carbs,
         thumb: "",
         createdAt: new Date().toISOString(),
       });
@@ -1796,6 +2332,7 @@ function openManualAdd(dateKeyToUse, title) {
         ? "記録しました　残り " + calcRemain(todayKey()).toLocaleString() + " kcal"
         : labelOf(dateKeyToUse) + " に記録しました"
     );
+    afterMealRecorded(dateKeyToUse);
   });
 }
 
@@ -1803,22 +2340,26 @@ document.getElementById("btnManualOpen").onclick = () => {
   openManualAdd(todayKey(), "写真なしで追加");
 };
 
-/* APIキーが無い人用の判定ボタン。カロリーを入れてもらい、写真のときと同じ判定を出す */
-document.getElementById("askBtn").onclick = () => {
+/* 写真なしで判定する。カロリーを入れてもらい、写真のときと同じ判定を出す。
+   initial を渡すと、その数字が入った状態で開く（おすすめの献立から開くとき） */
+function openJudge(initial) {
   if (!calcBmr(state.profile)) {
     openWelcome();
     return;
   }
   openModal(
     "これ食っていい？",
-    null,
+    initial || null,
     (edited) => {
       state.pending = Object.assign({ note: "", thumb: "", photo: "" }, edited);
       showVerdict();
     },
     "判定する"
   );
-};
+}
+
+/* APIキーが無い人用の判定ボタン */
+document.getElementById("askBtn").onclick = () => openJudge();
 
 /* 「食べたもの」の＋から、表示中の日に追加する（昨日の入れ忘れなど） */
 document.getElementById("btnAddToDay").onclick = () => {
@@ -1955,10 +2496,12 @@ setInterval(() => {
   if (todayKey() !== lastSeenDay) {
     lastSeenDay = todayKey();
     state.viewDate = lastSeenDay;
+    pickedSlot = null;
     fillBurnForm();
     renderAll();
   } else {
     renderReminder();
+    renderSuggest(); // 時間が進むと「次の食事」が昼→夜のように変わるため
   }
 }, 60000);
 
