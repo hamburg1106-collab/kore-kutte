@@ -31,6 +31,7 @@ Vite構成なので、置き場所を間違えると公開時に消える。
 | `src/main.js` | アプリ本体。CSSもここからimportしている |
 | `src/foods.js` | 食品検索（キーなしでもkcal・PFCを入れるため） |
 | `src/suggest.js` | 次の食事のおすすめ（AIなし版）と1週間の傾向 |
+| `src/ai.js` | みんなで使うAI。AI専用のFirebaseプロジェクト **korekutte-ai** の AI Logic を、App Check（reCAPTCHA Enterprise）付きで呼ぶ。自分のAPIキーを入れた人はこれを使わず直接呼ぶ |
 | `src/data/` | 食品成分表から作ったデータ。**手で直さず** `tools/build-foods.cjs` で作り直す |
 | `tools/build-foods.cjs` | 文部科学省の食品成分表Excel → `src/data/` を作る。よく食べるもの・献立の一覧もここ |
 | `src/style.css` | 見た目 |
@@ -50,6 +51,8 @@ Vite構成なので、置き場所を間違えると公開時に消える。
 - アイコンやmanifestを変えたときは `CACHE_NAME` の版数を上げる
 - 個人データ（体重・食事）は、Firestoreのパスに推測不能な「同期コード」を挟んで保護している。この仕組みを壊さない
 - Firebaseの設定値がコードに直書きされているのは**意図的**（公開前提の値なので問題ない）
+- Firebaseは2つ使っている。記録の保存は **ouchi-no-kondate**（他のアプリと共用）、AIは **korekutte-ai**（AIの無料枠を他のアプリと取り合わないための専用）
+- 手元（localhost）でAIを試すと、App Check のデバッグトークンがブラウザの開発者ツールに出る。Firebaseコンソールの App Check →「デバッグトークンを管理」に登録すると通る。**確認が済んだら削除する**
 
 ## 段階的な移行の途中
 

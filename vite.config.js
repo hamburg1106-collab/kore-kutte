@@ -13,6 +13,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // AI（AI Logic・App Check）は使うときに読み込むので、起動時に読む本体とは分けておく
+          if (/node_modules\/(@firebase\/(ai|app-check)|firebase\/(ai|app-check))\//.test(id)) {
+            return "firebase-ai";
+          }
           if (id.includes("node_modules/firebase") || id.includes("node_modules/@firebase")) {
             return "firebase";
           }

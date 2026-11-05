@@ -16,6 +16,7 @@ import "firebase/compat/firestore";
 
 import { loadFoods, searchFoods } from "./foods.js";
 import { nextSlot, buildSuggestion, weekTrend, trendText, SLOT_LABEL } from "./suggest.js";
+import { sharedGenerate, sharedErrorStatus, sharedAiAvailable } from "./ai.js";
 
 /* 一覧が取れていないときに使うモデル。
    最新ではなく一世代前を既定にする（理由は resolveModel のコメント） */
@@ -863,24 +864,22 @@ function renderChips() {
 }
 
 /* 撮影ボタンは今日を見ているときだけ出す（写真判定は今日の記録にしか入らないため）。
-   APIキーが無い人には、写真の代わりにカロリーを入れて判定するボタンを出す。
+   AIが使えないとき（ファイルを直接開いたときなど）は、写真の代わりに
+   カロリーを入れて判定するボタンを出す。
    初めて使うときは、足りない準備をボタンの下で案内する */
 function renderShootArea() {
   const isToday = state.viewDate === todayKey();
   document.getElementById("shootArea").hidden = !isToday;
 
-  const hasKey = !!getApiKey();
-  document.getElementById("shootBtn").hidden = !hasKey;
-  document.getElementById("askBtn").hidden = hasKey;
-  // キーなしだと判定ボタン自体が手入力なので、記録だけの手入力は出さない
-  document.getElementById("btnManualOpen").hidden = !hasKey;
+  const ai = canUseAi();
+  document.getElementById("shootBtn").hidden = !ai;
+  document.getElementById("askBtn").hidden = ai;
+  // 判定ボタン自体が手入力のときは、記録だけの手入力は出さない
+  document.getElementById("btnManualOpen").hidden = !ai;
 
   const hint = document.getElementById("setupHint");
   if (!calcBmr(state.profile)) {
     hint.textContent = "① まず、はじめの設定をしてください（1分） →";
-    hint.hidden = false;
-  } else if (!hasKey) {
-    hint.textContent = "📷 写真で判定したいときは（APIキーの設定） →";
     hint.hidden = false;
   } else {
     hint.hidden = true;
@@ -1267,24 +1266,15 @@ document.getElementById("hero").onclick = () => {
   if (!calcBmr(state.profile)) openWelcome();
 };
 
-/* APIキーの欄まで連れていく。取り方の手順も開いておく */
-function openKeySettings() {
-  document.querySelector(".key-guide").open = true;
-  openSettings("inApiKey");
-}
-
-/* 撮影ボタンの下の準備案内。足りないものの入力欄まで直接連れていく */
-document.getElementById("setupHint").onclick = () => {
-  if (calcBmr(state.profile)) openKeySettings();
-  else openWelcome();
-};
+/* 撮影ボタンの下の準備案内。はじめの設定まで直接連れていく */
+document.getElementById("setupHint").onclick = openWelcome;
 
 /* ---------- はじめての設定 ----------
    身長などが空のまま開いたときに、1問ずつ聞いていく。
    「次へ」のたびに保存するので、途中で閉じても入れたところまでは残る。 */
 
 const welcomePanel = document.getElementById("welcomePanel");
-const WELCOME_STEPS = 4;
+const WELCOME_STEPS = 3;
 let welcomeChecked = false; // 自動で出すのは起動して最初の1回だけ
 
 const welcomeFields = [
@@ -1309,8 +1299,6 @@ function openWelcome() {
     const v = state.profile[key];
     if (v !== null && v !== undefined) document.getElementById(id).value = v;
   });
-  document.getElementById("wApiKey").value = getApiKey();
-  document.getElementById("wKeyResult").hidden = true;
   showWelcomeStep(1);
   openOverlay(welcomePanel);
 }
@@ -1360,12 +1348,12 @@ welcomePanel.querySelectorAll("[data-back]").forEach((btn) => {
   btn.onclick = () => showWelcomeStep(Number(btn.dataset.back));
 });
 
-/* スマホの種類を選んだら、そのまま次へ */
+/* スマホの種類を選んだら、それで準備は終わり。
+   写真判定はみんなで使うAIがあるので、APIキーはここでは聞かない（⚙ から入れられる） */
 welcomePanel.querySelectorAll("[data-burn-mode]").forEach((btn) => {
-  btn.onclick = async () => {
+  btn.onclick = () => {
     state.profile.burnMode = btn.dataset.burnMode;
-    showWelcomeStep(4);
-    await saveWelcome();
+    finishWelcome();
   };
 });
 
@@ -1377,31 +1365,7 @@ function finishWelcome() {
   showToast("準備できました");
 }
 
-document.getElementById("welcomeNoKey").onclick = finishWelcome;
 document.getElementById("welcomeClose").onclick = () => closeOverlay(welcomePanel);
-
-document.getElementById("welcomeWithKey").onclick = async () => {
-  const key = document.getElementById("wApiKey").value.trim();
-  const box = document.getElementById("wKeyResult");
-  box.hidden = false;
-  box.className = "error-box";
-
-  if (!key) {
-    box.textContent = "キーを貼り付けてください。キーなしで使う場合は「キーなしではじめる」を押してください。";
-    return;
-  }
-
-  box.textContent = "確認中…";
-  const result = await checkApiKey(key);
-  if (!result.ok) {
-    box.textContent = result.message;
-    return;
-  }
-
-  setApiKey(key);
-  apiKeyInput.value = key;
-  finishWelcome();
-};
 
 /* 機種変更の人は「はじめに」を閉じて、引き継ぎコードの欄へ。
    history.back() で閉じると、あとから来る popstate が設定まで閉じてしまうので、
@@ -1747,12 +1711,22 @@ async function askGemini(base64) {
   );
 }
 
+/* みんなで使うAI（Firebase AI Logic）で使うモデル。
+   写真判定は Flash、提案は軽い Flash-Lite（無料枠はモデルごとに別なので、提案が判定の枠を食わない）。
+   ただ Flash-Lite は混雑で 500 が続く日があったので、だめなら Flash に逃がす */
+const SHARED_JUDGE = { models: [DEFAULT_MODEL, DEFAULT_MODEL, "gemini-3.5-flash-lite"], timeoutMs: 45000 };
+const SHARED_SUGGEST = { models: ["gemini-3.5-flash-lite", DEFAULT_MODEL], timeoutMs: 30000 };
+
 /* Geminiに頼んで、決めた形（schema）のJSONで答えをもらう。
-   写真判定と「次の食事のおすすめ」の両方から使う */
-async function callGemini(parts, schema, onRetry) {
+   写真判定と「次の食事のおすすめ」の両方から使う。
+   自分のAPIキーを入れている人はそのキーで、入れていない人はみんなで使うAIで呼ぶ */
+async function callGemini(parts, schema, onRetry, shared) {
   const key = getApiKey();
   if (!key) {
-    throw new Error("右上の ⚙ 設定で Gemini APIキーを入れてください。");
+    if (!sharedAiAvailable()) {
+      throw new Error("この開き方ではAIを使えません。公開サイトから開いてください。");
+    }
+    return callSharedGemini(parts, schema, onRetry, shared || SHARED_JUDGE);
   }
 
   const body = {
@@ -1823,6 +1797,60 @@ async function callGemini(parts, schema, onRetry) {
   throw lastError || new Error("判定に失敗しました。もう一度試してください。");
 }
 
+/* みんなで使うAIで呼ぶ。試し直しの考え方は自分のキーのときと同じ
+   （混雑は待って試し直す、使いすぎは待っても直らないのですぐ止める） */
+async function callSharedGemini(parts, schema, onRetry, shared) {
+  const models = shared.models;
+  let lastError = null;
+
+  for (let i = 0; i < models.length; i++) {
+    if (i > 0) {
+      if (onRetry) onRetry(i + 1, models.length);
+      await sleep(BACKOFF_MS[i - 1] || BACKOFF_MS[BACKOFF_MS.length - 1]);
+    }
+
+    let text;
+    try {
+      text = await sharedGenerate(models[i], parts, schema, shared.timeoutMs);
+    } catch (e) {
+      const status = sharedErrorStatus(e);
+      console.warn("shared AI error", status, e && e.message);
+
+      if (status === 429) {
+        // 無料枠の1日分は日本時間の16〜17時ごろ（米国太平洋時間の0時）に戻る
+        throw new Error(
+          "今日のAIの無料枠（みんなで共有）を使い切りました。夕方に戻ります。\n" +
+            "それまでは「写真なしで入力する」から、カロリーを入れて判定してください。"
+        );
+      }
+      if (status === 401 || status === 403) {
+        throw new Error("AIにつながりませんでした（アプリの確認に失敗）。開き直してもう一度試してください。");
+      }
+      if (status === 404) {
+        lastError = new Error("AIのモデル「" + models[i] + "」が使えませんでした。");
+        continue;
+      }
+      if (!status || RETRYABLE_STATUS.indexOf(status) >= 0) {
+        lastError = new Error(
+          status
+            ? "混み合っていて判定できませんでした。少し待ってからもう一度試してください。"
+            : "AIから返事がありませんでした。電波の状態を確認するか、少し待ってからもう一度試してください。"
+        );
+        continue;
+      }
+      throw new Error("AIの呼び出しに失敗しました。\n\n" + ((e && e.message) || ""));
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      lastError = new Error("AIの答えを読み取れませんでした。もう一度試してください。");
+    }
+  }
+
+  throw lastError || new Error("AIの呼び出しに失敗しました。もう一度試してください。");
+}
+
 /* ---------- 次の食事のおすすめ（AI版） ----------
    AIが使えるときだけ出す。無料枠を使いすぎないよう、
    食事を記録した直後に1回だけ作って端末に取っておき、画面を開くたびには呼ばない。
@@ -1855,8 +1883,9 @@ const SUGGEST_SCHEMA = {
   required: ["advice", "menus"],
 };
 
+/* 自分のキーが無くても、みんなで使うAIがあるので基本は使える */
 function canUseAi() {
-  return !!getApiKey();
+  return !!getApiKey() || sharedAiAvailable();
 }
 
 /* 今日の記録の「指紋」。記録が増えたり消えたりしたら、取っておいた提案は古い */
@@ -1948,6 +1977,7 @@ function aiSuggestPrompt(s) {
     "",
     "ルール:",
     "- コンビニ・外食・自炊から1つずつ、合計3案。日本で手に入りやすい具体的なメニューにする",
+    "- 店名・チェーン名・商品名は出さず、「焼き魚定食」「サラダチキン」のような一般的な名前にする",
     "- kcal と PFC は1人前の目安。目安のkcalを大きく超えない",
     "- 足りない栄養素を補い、取りすぎている栄養素は控えめにする",
     "- name は20文字以内。detail は量や選び方のコツを20文字程度で",
@@ -1963,7 +1993,7 @@ async function requestAiSuggest() {
 
   let status = "";
   try {
-    const res = await callGemini([{ text: aiSuggestPrompt(s) }], SUGGEST_SCHEMA);
+    const res = await callGemini([{ text: aiSuggestPrompt(s) }], SUGGEST_SCHEMA, null, SHARED_SUGGEST);
     writeAiSuggest({
       sig: aiSuggestSig(s.slot),
       advice: String(res.advice || ""),
