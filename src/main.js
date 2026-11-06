@@ -1820,9 +1820,12 @@ async function askGemini(base64) {
       { text: JUDGE_PROMPT },
     ],
     RESPONSE_SCHEMA,
-    (n, total) => {
+    (n, total, why) => {
       // 黙って数秒止まると壊れたように見えるので、試し直していることを出す
-      judgingText.textContent = "混み合っています。もう一度試しています（" + n + "/" + total + "）";
+      judgingText.textContent =
+        why === "quota"
+          ? "今日の通常版の枠を使い切ったので、簡易版で判定しています…"
+          : "混み合っています。もう一度試しています（" + n + "/" + total + "）";
     }
   );
 }
@@ -1830,8 +1833,19 @@ async function askGemini(base64) {
 /* みんなで使うAI（Firebase AI Logic）で使うモデル。
    写真判定は Flash、提案は軽い Flash-Lite（無料枠はモデルごとに別なので、提案が判定の枠を食わない）。
    ただ Flash-Lite は混雑で 500 が続く日があったので、だめなら Flash に逃がす */
-const SHARED_JUDGE = { models: [DEFAULT_MODEL, DEFAULT_MODEL, "gemini-3.5-flash-lite"], timeoutMs: 45000 };
-const SHARED_SUGGEST = { models: ["gemini-3.5-flash-lite", DEFAULT_MODEL], timeoutMs: 30000 };
+const LITE_MODEL = "gemini-3.5-flash-lite";
+const SHARED_JUDGE = { models: [DEFAULT_MODEL, DEFAULT_MODEL, LITE_MODEL], timeoutMs: 45000 };
+const SHARED_SUGGEST = { models: [LITE_MODEL, DEFAULT_MODEL], timeoutMs: 30000 };
+
+/* 使いすぎ（429）のとき、Flash-Lite に切り替えられるなら残りの候補を Lite だけにして true を返す。
+   無料枠は1日あたり Flash 20回・Lite 500回（2026-11-06実測）で、枠はモデルごとに別。
+   Flash を使い切っても Lite はまだ残っていることが多いので、止めずに簡易版で判定を続ける。
+   同じモデルで試し直すと枠を余計に食うだけなので、それはしない */
+function switchToLiteOnQuota(models, i) {
+  if (models.slice(0, i + 1).indexOf(LITE_MODEL) >= 0) return false;
+  models.splice(i + 1, models.length, LITE_MODEL);
+  return true;
+}
 
 /* Geminiに頼んで、決めた形（schema）のJSONで答えをもらう。
    写真判定と「次の食事のおすすめ」の両方から使う。
@@ -1855,9 +1869,13 @@ async function callGemini(parts, schema, onRetry, shared) {
 
   const models = [resolveModel(), resolveModel(), fallbackModel()];
   let lastError = null;
+  let quotaSwitch = false;
 
   for (let i = 0; i < models.length; i++) {
-    if (i > 0) {
+    if (quotaSwitch) {
+      if (onRetry) onRetry(i + 1, models.length, "quota");
+      quotaSwitch = false;
+    } else if (i > 0) {
       if (onRetry) onRetry(i + 1, models.length);
       await sleep(BACKOFF_MS[i - 1]);
     }
@@ -1889,9 +1907,14 @@ async function callGemini(parts, schema, onRetry, shared) {
     if (res.status === 400 || res.status === 401 || res.status === 403) {
       throw new Error("APIキーが正しくないようです。下の「設定」を見直してください。\n\n" + msg);
     }
-    // 使いすぎは待っても直らない。試し直すと枠を余計に食うだけ
+    // 使いすぎは待っても直らない。同じモデルで試し直すと枠を余計に食うだけなので、枠が別の Lite に切り替える
     if (res.status === 429) {
-      throw new Error("無料枠の上限に達しました。しばらく待ってからもう一度試してください。\n\n" + msg);
+      if (switchToLiteOnQuota(models, i)) {
+        quotaSwitch = true;
+        lastError = new Error("無料枠の上限に達しました。\n\n" + model + " / HTTP 429 / " + msg);
+        continue;
+      }
+      throw new Error("無料枠の上限に達しました。しばらく待ってからもう一度試してください。\n\n" + model + " / HTTP 429 / " + msg);
     }
     // モデル名が古い場合。一覧を取り直せば直るので、まず別のモデルを試す
     if (res.status === 404) {
@@ -1916,11 +1939,15 @@ async function callGemini(parts, schema, onRetry, shared) {
 /* みんなで使うAIで呼ぶ。試し直しの考え方は自分のキーのときと同じ
    （混雑は待って試し直す、使いすぎは待っても直らないのですぐ止める） */
 async function callSharedGemini(parts, schema, onRetry, shared) {
-  const models = shared.models;
+  const models = shared.models.slice(); // 429で書き換えるので元の設定は触らない
   let lastError = null;
+  let quotaSwitch = false;
 
   for (let i = 0; i < models.length; i++) {
-    if (i > 0) {
+    if (quotaSwitch) {
+      if (onRetry) onRetry(i + 1, models.length, "quota");
+      quotaSwitch = false;
+    } else if (i > 0) {
       if (onRetry) onRetry(i + 1, models.length);
       await sleep(BACKOFF_MS[i - 1] || BACKOFF_MS[BACKOFF_MS.length - 1]);
     }
@@ -1933,6 +1960,12 @@ async function callSharedGemini(parts, schema, onRetry, shared) {
       console.warn("shared AI error", status, e && e.message);
 
       if (status === 429) {
+        // Flash を使い切っても、枠が別の Lite が残っていればそちらで続ける
+        if (switchToLiteOnQuota(models, i)) {
+          quotaSwitch = true;
+          lastError = new Error("今日のAIの無料枠（みんなで共有）を使い切りました。夕方に戻ります。");
+          continue;
+        }
         // 無料枠の1日分は日本時間の16〜17時ごろ（米国太平洋時間の0時）に戻る
         throw new Error(
           "今日のAIの無料枠（みんなで共有）を使い切りました。夕方に戻ります。\n" +
