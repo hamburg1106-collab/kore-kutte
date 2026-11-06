@@ -1,6 +1,7 @@
 {
   "name": "これ食っていい？",
   "short_name": "食っていい？",
+  "id": "./?app=korekutte-2",
   "description": "写真を撮ると、その日の残りカロリーと見比べて食べていいか答えるアプリ",
   "start_url": "./index.html",
   "scope": "./",
