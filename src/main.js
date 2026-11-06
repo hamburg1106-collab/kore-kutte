@@ -675,6 +675,13 @@ function decide(kcal, remain) {
   return "stop";
 }
 
+/* 画面の中で使う線のアイコン（下のタブと同じ太さ・角の丸めにそろえる） */
+const svgIcon = (d) => '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">' + d + "</svg>";
+const ICON = {
+  utensils: svgIcon('<path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2.2 1-3.5 4-3.5 7.5H17"/>'),
+  close: svgIcon('<path d="M6 6l12 12M18 6L6 18"/>'),
+};
+
 const VERDICT_TEXT = {
   ok: "食っていい",
   half: "半分にしとけ",
@@ -764,7 +771,7 @@ function renderHero() {
     fill.style.strokeDashoffset = RING_LENGTH;
     label.textContent = "はじめに";
     value.textContent = "—";
-    sub.textContent = "右上の ⚙ から身長・体重・年齢を入れてください";
+    sub.textContent = "下の「設定」から身長・体重・年齢を入れてください";
     return;
   }
 
@@ -872,8 +879,13 @@ function renderShootArea() {
   document.getElementById("shootArea").hidden = !isToday;
 
   const ai = canUseAi();
-  document.getElementById("shootBtn").hidden = !ai;
-  document.getElementById("askBtn").hidden = ai;
+  // 下の撮影ボタン。AIが使えないときはカメラの代わりにペンの絵にして、カロリーを入れて判定する
+  const fab = document.getElementById("fab");
+  fab.classList.toggle("no-ai", !ai);
+  fab.setAttribute("aria-label", ai ? "これ食っていい？ 写真で判定" : "これ食っていい？ カロリーを入れて判定");
+  document.getElementById("shootTip").textContent = ai
+    ? "食べる前に、下の カメラ で撮って判定。お菓子は栄養成分表示も一緒に写すと正確です。"
+    : "食べる前に、下の「判定」でカロリーを入れて判定。";
   // 判定ボタン自体が手入力のときは、記録だけの手入力は出さない
   document.getElementById("btnManualOpen").hidden = !ai;
 
@@ -975,11 +987,28 @@ function menuItem(m) {
 
 function renderSuggest() {
   const box = document.getElementById("suggest");
-  if (state.viewDate !== todayKey() || !calcBmr(state.profile)) {
+  const empty = document.getElementById("suggestEmpty");
+  const noProfile = !calcBmr(state.profile);
+  if (state.viewDate !== todayKey() || noProfile) {
     box.hidden = true;
+    // おすすめのタブが空にならないよう、出せない理由と次の一手を出す
+    empty.hidden = false;
+    document.getElementById("suggestEmptyText").textContent = noProfile
+      ? "はじめの設定をすると、残りカロリーに合わせて次の食事をおすすめします。"
+      : "おすすめは今日の分だけ出します。";
+    const btn = document.getElementById("suggestEmptyBtn");
+    btn.textContent = noProfile ? "はじめの設定をする" : "今日に戻る";
+    btn.onclick = noProfile
+      ? openWelcome
+      : () => {
+          state.viewDate = todayKey();
+          fillBurnForm();
+          renderAll();
+        };
     return;
   }
   box.hidden = false;
+  empty.hidden = true;
 
   const s = currentSuggestion();
   document.getElementById("suggestTitle").textContent = suggestTitle(s);
@@ -1034,7 +1063,34 @@ function renderMealList() {
 
   ul.innerHTML = "";
 
-  rows.forEach((m) => {
+  // 朝・昼・おやつ・夜・夜食に分けて、まとまりごとに小計を出す。
+  // 別の日にあとから足した記録（昨日の入れ忘れなど）は時刻が当てにならないので「時刻なし」にまとめる
+  const groupOf = (m) => {
+    const t = mealTime(m, key);
+    return t ? mealGroup(t.getHours()) : "時刻なし";
+  };
+  const ordered = [...rows.filter((m) => mealTime(m, key)), ...rows.filter((m) => !mealTime(m, key))];
+  let lastGroup = null;
+
+  ordered.forEach((m) => {
+    const t = mealTime(m, key);
+    const group = groupOf(m);
+    if (group !== lastGroup) {
+      lastGroup = group;
+      const total = ordered
+        .filter((x) => groupOf(x) === group)
+        .reduce((sum, x) => sum + (Number(x.kcal) || 0), 0);
+      const head = document.createElement("li");
+      head.className = "meal-group";
+      const gname = document.createElement("span");
+      gname.textContent = group;
+      const gsum = document.createElement("span");
+      gsum.className = "meal-group-sum";
+      gsum.textContent = total.toLocaleString() + " kcal";
+      head.append(gname, gsum);
+      ul.appendChild(head);
+    }
+
     const li = document.createElement("li");
 
     // 写真のない記録も行の頭を揃える
@@ -1046,7 +1102,7 @@ function renderMealList() {
     } else {
       const ph = document.createElement("div");
       ph.className = "meal-noimg";
-      ph.textContent = "🍽";
+      ph.innerHTML = ICON.utensils;
       ph.setAttribute("aria-hidden", "true");
       li.appendChild(ph);
     }
@@ -1060,10 +1116,12 @@ function renderMealList() {
     name.title = m.name; // 2行で切れたときに全文を確認できるように
     body.appendChild(name);
 
-    if (m.portion) {
+    // 食べた時刻と量を1行に並べる
+    const subText = [t ? hhmmOf(t) : "", m.portion || ""].filter(Boolean).join("　");
+    if (subText) {
       const portion = document.createElement("div");
       portion.className = "meal-portion";
-      portion.textContent = m.portion;
+      portion.textContent = subText;
       body.appendChild(portion);
     }
 
@@ -1087,7 +1145,7 @@ function renderMealList() {
 
     const del = document.createElement("button");
     del.className = "meal-del";
-    del.textContent = "×";
+    del.innerHTML = ICON.close;
     del.title = "削除";
     del.setAttribute("aria-label", m.name + " を削除");
     del.onclick = () => {
@@ -1099,6 +1157,28 @@ function renderMealList() {
 
     ul.appendChild(li);
   });
+}
+
+/* 記録した時刻。その日のうちに記録したものだけ返す（別の日にあとから足したものは null） */
+function mealTime(m, key) {
+  if (!m.createdAt) return null;
+  const t = new Date(m.createdAt);
+  if (isNaN(t) || dateKey(t) !== key) return null;
+  return t;
+}
+
+/* 時刻から、どの食事のまとまりに入れるか。夕食が遅い人もいるので22時までは夜ごはん */
+function mealGroup(h) {
+  if (h < 4) return "夜食";
+  if (h < 10) return "朝ごはん";
+  if (h < 15) return "昼ごはん";
+  if (h < 17) return "おやつ";
+  if (h < 22) return "夜ごはん";
+  return "夜食";
+}
+
+function hhmmOf(t) {
+  return String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
 }
 
 /* 1週間リスト用の短い日付ラベル。幅が狭いので「9/12(金)」程度に収める */
@@ -1218,22 +1298,39 @@ function hideOverlay(el) {
   }
 }
 
+/* 「戻る」が終わるのを待っている間に開いた画面。
+   ダイアログを閉じた直後に判定結果を開くと、閉じるための「戻る」があとから届いて
+   判定結果まで消してしまうので、履歴に積むのは「戻る」が終わってからにする */
+let backPending = false;
+const deferredOverlays = new Set();
+
 function openOverlay(el) {
   if (!el.hidden) return;
   el.hidden = false;
   document.body.classList.add("no-scroll");
-  history.pushState({ overlay: el.id }, "");
+  if (backPending) deferredOverlays.add(el.id);
+  else history.pushState({ overlay: el.id }, "");
 }
 
 function closeOverlay(el) {
   if (el.hidden) return;
   // 自分が積んだ履歴なら「戻る」で閉じる（popstate の中で hideOverlay される）
-  if (history.state && history.state.overlay === el.id) history.back();
-  else hideOverlay(el);
+  if (history.state && history.state.overlay === el.id) {
+    backPending = true;
+    history.back();
+  } else hideOverlay(el);
 }
 
+/* 「戻る」で閉じるのは一番上の画面だけ。判定結果の上で「手で直す」を開いて閉じたとき、
+   下の判定結果まで消えないよう、戻った先の履歴が指している画面は残す */
 window.addEventListener("popstate", () => {
-  document.querySelectorAll(".overlay:not([hidden])").forEach(hideOverlay);
+  backPending = false;
+  const keep = history.state && history.state.overlay;
+  document.querySelectorAll(".overlay:not([hidden])").forEach((el) => {
+    if (el.id !== keep && !deferredOverlays.has(el.id)) hideOverlay(el);
+  });
+  deferredOverlays.forEach((id) => history.pushState({ overlay: id }, ""));
+  deferredOverlays.clear();
 });
 
 /* 背景の暗いところを押したら閉じる（中身を押したときは閉じない） */
@@ -1257,6 +1354,24 @@ function openSettings(focusId) {
     }, 250);
   }
 }
+
+/* ---------- 下のタブ ---------- */
+/* 画面を「きょう／おすすめ／きろく」の3つに分けて、押した1つだけを出す。
+   起動したときは毎回「きょう」から（いちばんよく使うため） */
+const tabButtons = document.querySelectorAll(".tabbar [data-tab]");
+
+function showTab(pageId) {
+  tabButtons.forEach((btn) => {
+    const on = btn.dataset.tab === pageId;
+    btn.setAttribute("aria-selected", String(on));
+    document.getElementById(btn.dataset.tab).hidden = !on;
+  });
+  window.scrollTo({ top: 0 });
+}
+
+tabButtons.forEach((btn) => {
+  btn.onclick = () => showTab(btn.dataset.tab);
+});
 
 document.getElementById("btnSettings").onclick = () => openSettings();
 document.getElementById("btnCloseSettings").onclick = () => closeOverlay(settingsPanel);
@@ -1349,7 +1464,7 @@ welcomePanel.querySelectorAll("[data-back]").forEach((btn) => {
 });
 
 /* スマホの種類を選んだら、それで準備は終わり。
-   写真判定はみんなで使うAIがあるので、APIキーはここでは聞かない（⚙ から入れられる） */
+   写真判定はみんなで使うAIがあるので、APIキーはここでは聞かない（「設定」から入れられる） */
 welcomePanel.querySelectorAll("[data-burn-mode]").forEach((btn) => {
   btn.onclick = () => {
     state.profile.burnMode = btn.dataset.burnMode;
@@ -1536,7 +1651,7 @@ syncInput.addEventListener("change", () => {
 document.getElementById("btnCopyCode").onclick = async () => {
   try {
     await navigator.clipboard.writeText(syncInput.value);
-    alert("引き継ぎコードをコピーしました。新しいスマホの ⚙ 設定 →「機種変更・バックアップ」に貼り付けてください。");
+    alert("引き継ぎコードをコピーしました。新しいスマホの「設定」→「機種変更・バックアップ」に貼り付けてください。");
   } catch (e) {
     // https以外ではクリップボードが使えないので、選択状態にして手でコピーしてもらう
     syncInput.focus();
@@ -1771,7 +1886,7 @@ async function callGemini(parts, schema, onRetry, shared) {
 
     // キーの誤りはモデルを変えても直らない
     if (res.status === 400 || res.status === 401 || res.status === 403) {
-      throw new Error("APIキーが正しくないようです。右上の ⚙ 設定を見直してください。\n\n" + msg);
+      throw new Error("APIキーが正しくないようです。下の「設定」を見直してください。\n\n" + msg);
     }
     // 使いすぎは待っても直らない。試し直すと枠を余計に食うだけ
     if (res.status === 429) {
@@ -1780,7 +1895,7 @@ async function callGemini(parts, schema, onRetry, shared) {
     // モデル名が古い場合。一覧を取り直せば直るので、まず別のモデルを試す
     if (res.status === 404) {
       lastError = new Error(
-        "モデル「" + model + "」が使えませんでした。⚙ 設定でモデル一覧を取り直してください。\n\n" + msg
+        "モデル「" + model + "」が使えませんでした。下の「設定」でモデル一覧を取り直してください。\n\n" + msg
       );
       continue;
     }
@@ -2038,7 +2153,7 @@ photoInput.addEventListener("change", async () => {
   if (!file) return;
 
   if (!calcBmr(state.profile)) {
-    showError("先に右上の ⚙ 設定で、身長・体重・年齢を入れてください。");
+    showError("先に下の「設定」で、身長・体重・年齢を入れてください。");
     return;
   }
 
@@ -2089,7 +2204,8 @@ function showVerdict() {
   const remain = calcRemain(todayKey());
   const mark = decide(f.kcal, remain);
 
-  verdictEl.className = "verdict " + mark;
+  verdictEl.className = "overlay verdict-screen " + mark;
+  renderVerdictRing(f.kcal);
   // キーなしで手入力から判定したときは写真が無い
   const photo = document.getElementById("verdictPhoto");
   photo.hidden = !f.photo;
@@ -2103,17 +2219,36 @@ function showVerdict() {
 
   let note = f.note || "";
   if (f.confidence === "low") note += "（推定の確からしさは低めです）";
-  if (mark === "ok") note += `　食べても ${(remain - f.kcal).toLocaleString()}kcal 残ります。`;
-  if (mark === "half") note += `　食べると残り ${(remain - f.kcal).toLocaleString()}kcal です。`;
-  if (mark === "stop" && remain > 0)
-    note += `　残り ${remain.toLocaleString()}kcal なので ${(f.kcal - remain).toLocaleString()}kcal オーバーします。`;
+  // 食べたあとに残る量はリングで見せるので、ここには書かない。今すでにオーバーしているときだけ添える
+  if (mark === "stop" && remain <= 0) note += "　今日はもう目標を超えています。";
   document.getElementById("verdictNote").textContent = note;
 
-  verdictEl.hidden = false;
-  errorEl.hidden = true;
+  // おすすめのタブから判定したときも、結果は「きょう」のタブに出す
+  if (document.getElementById("pageToday").hidden) showTab("pageToday");
 
-  // 結果は撮影ボタンの下に出るので、見落とさないよう結果の位置まで動かす
-  verdictEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  errorEl.hidden = true;
+  // 全画面で出す。開き直すたびにハンコの動きをもう一度見せる
+  verdictEl.scrollTop = 0;
+  openOverlay(verdictEl);
+}
+
+/* 判定結果のリング。今日すでに食べた分（灰）の先に、これを食べた分（結果の色）を足して描く */
+function renderVerdictRing(kcal) {
+  const key = todayKey();
+  const target = calcTarget(key);
+  const intake = calcIntake(key);
+  const after = target - intake - kcal;
+  // オーバーするときは「食べた合計」を一周にして、灰と色の両方が見えるようにする
+  const full = Math.max(target, intake + kcal);
+  const part = (v) => (full > 0 ? Math.max(0, Math.min(1, v / full)) : 1);
+
+  document.getElementById("vringNow").style.strokeDashoffset = RING_LENGTH * (1 - part(intake));
+  document.getElementById("vringAdd").style.strokeDashoffset = RING_LENGTH * (1 - part(intake + kcal));
+
+  document.getElementById("vringLabel").textContent = after < 0 ? "食べたら" : "食べても";
+  document.getElementById("vringValue").textContent =
+    (after < 0 ? "+" : "") + Math.abs(after).toLocaleString();
+  document.getElementById("vringUnit").textContent = after < 0 ? "kcal オーバー" : "kcal 残る";
 }
 
 const btnEat = document.getElementById("btnEat");
@@ -2149,7 +2284,7 @@ btnEat.onclick = async () => {
   }
 
   state.pending = null;
-  verdictEl.hidden = true;
+  closeOverlay(verdictEl);
 
   const remain = calcRemain(todayKey());
   showToast(
@@ -2162,7 +2297,7 @@ btnEat.onclick = async () => {
 
 document.getElementById("btnSkip").onclick = () => {
   state.pending = null;
-  verdictEl.hidden = true;
+  closeOverlay(verdictEl);
 };
 
 /* 判定結果のカロリーを手で直す */
@@ -2388,8 +2523,22 @@ function openJudge(initial) {
   );
 }
 
-/* APIキーが無い人用の判定ボタン */
-document.getElementById("askBtn").onclick = () => openJudge();
+/* 下のタブの真ん中の判定ボタン。どのタブ・どの日を見ていても、今日の「きょう」に戻ってから判定する。
+   AIが使えるときは写真を選ぶ画面、使えないときはカロリーを入れる画面を開く */
+document.getElementById("fab").onclick = () => {
+  if (state.viewDate !== todayKey()) {
+    state.viewDate = todayKey();
+    fillBurnForm();
+    renderAll();
+  }
+  showTab("pageToday");
+  if (!calcBmr(state.profile)) {
+    openWelcome();
+    return;
+  }
+  if (canUseAi()) photoInput.click();
+  else openJudge();
+};
 
 /* 「食べたもの」の＋から、表示中の日に追加する（昨日の入れ忘れなど） */
 document.getElementById("btnAddToDay").onclick = () => {

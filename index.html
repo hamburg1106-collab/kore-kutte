@@ -25,20 +25,24 @@
 <div class="wrap">
 
   <!-- 上の帯：表示している日付と設定ボタン -->
+  <!-- 設定ボタンは下のタブに移した -->
   <header class="top">
     <div class="day-switch">
-      <button class="icon-btn" id="dayPrev" aria-label="前の日">‹</button>
+      <button class="icon-btn" id="dayPrev" aria-label="前の日"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
       <button class="day-label" id="dayLabel" aria-label="今日に戻る">—</button>
-      <button class="icon-btn" id="dayNext" aria-label="次の日">›</button>
+      <button class="icon-btn" id="dayNext" aria-label="次の日"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
     </div>
-    <button class="icon-btn" id="btnSettings" aria-label="設定">⚙</button>
   </header>
 
   <!-- クラウドに保存できていないときだけ出す（記録が消えうる状態なので知らせる） -->
   <p class="store-warn" id="storeWarn" hidden></p>
 
+  <!-- ===== タブ1：きょう（残りカロリー・判定） ===== -->
+  <div class="tab-page" id="pageToday" role="tabpanel" aria-labelledby="tabToday">
+
   <button class="reminder" id="reminder" hidden>
-    🌙 寝る前に、今日の消費カロリーを入れて締めよう
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>
+    寝る前に、今日の消費カロリーを入れて締めよう
   </button>
 
   <!-- 主役：あと何kcal食べられるか -->
@@ -80,26 +84,15 @@
   <!-- 消費カロリー。タップするとその場で入力できる -->
   <div class="chips">
     <button class="chip" id="chipBurn">
-      <span class="chip-top"><span class="chip-icon" aria-hidden="true">🔥</span>消費カロリー</span>
+      <span class="chip-top"><svg class="ico chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1-3.6 2.2-4.6.2 1.6 1 2.6 2 2.6 0-3 0-5.5.8-8Z"/></svg>消費カロリー</span>
       <span class="chip-val"><b id="chipBurnVal">—</b><small>kcal</small></span>
       <span class="chip-sub" id="chipBurnSub">タップで入力</span>
     </button>
   </div>
 
-  <!-- 写真で判定（今日を表示しているときだけ）。
-       APIキーが無いときは、写真の代わりにカロリーを入れて判定するボタンを出す -->
+  <!-- 撮影ボタンは下のタブの真ん中に移した。ここには補助の入口だけ残す（今日を表示しているときだけ） -->
   <div class="shoot-area" id="shootArea">
-    <button class="shoot-btn" id="askBtn" hidden>
-      <span class="shoot-icon" aria-hidden="true">🍙</span>
-      <span class="shoot-text">これ食っていい？</span>
-      <span class="shoot-hint">食べたいもののカロリーを入れて判定</span>
-    </button>
-    <label class="shoot-btn" id="shootBtn">
-      <input type="file" accept="image/*" capture="environment" id="photoInput" hidden>
-      <span class="shoot-icon" aria-hidden="true">📷</span>
-      <span class="shoot-text">これ食っていい？</span>
-      <span class="shoot-hint">お菓子は栄養成分表示も一緒に写すと正確</span>
-    </label>
+    <p class="shoot-tip" id="shootTip"></p>
     <button class="btn-link" id="btnManualOpen">写真なしで入力する</button>
     <button class="setup-hint" id="setupHint" hidden></button>
   </div>
@@ -111,22 +104,15 @@
 
   <div class="error-box" id="judgeError" hidden></div>
 
-  <!-- 判定結果 -->
-  <div class="verdict" id="verdict" hidden>
-    <img class="verdict-photo" id="verdictPhoto" alt="撮影した写真">
-    <div class="verdict-headline" id="verdictHeadline"></div>
-    <div class="verdict-food">
-      <div class="verdict-name" id="verdictName"></div>
-      <div class="verdict-portion" id="verdictPortion"></div>
-    </div>
-    <div class="verdict-kcal"><span id="verdictKcal"></span><span class="unit">kcal</span></div>
-    <div class="verdict-pfc" id="verdictPfc"></div>
-    <div class="verdict-note" id="verdictNote"></div>
-    <div class="verdict-actions">
-      <button class="btn-eat" id="btnEat">食べた！記録する</button>
-      <button class="btn-skip" id="btnSkip">やめた</button>
-    </div>
-    <button class="btn-link" id="btnFixKcal">カロリー・PFCを手で直す</button>
+  </div><!-- /pageToday -->
+
+  <!-- ===== タブ2：おすすめ ===== -->
+  <div class="tab-page" id="pageSuggest" role="tabpanel" aria-labelledby="tabSuggest" hidden>
+
+  <!-- 今日以外を見ているときや、はじめの設定がまだのときに代わりに出す -->
+  <div class="empty tab-empty" id="suggestEmpty" hidden>
+    <p id="suggestEmptyText"></p>
+    <button class="btn-sub" id="suggestEmptyBtn"></button>
   </div>
 
   <!-- 次の食事のおすすめ（今日を表示しているときだけ）。
@@ -159,11 +145,16 @@
     </div>
   </section>
 
+  </div><!-- /pageSuggest -->
+
+  <!-- ===== タブ3：きろく ===== -->
+  <div class="tab-page" id="pageLog" role="tabpanel" aria-labelledby="tabLog" hidden>
+
   <!-- 食べたもの -->
   <section class="block">
     <div class="block-head">
       <h2 id="mealsTitle">今日食べたもの</h2>
-      <button class="icon-btn add" id="btnAddToDay" aria-label="手で追加">＋</button>
+      <button class="icon-btn add" id="btnAddToDay" aria-label="手で追加"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
     </div>
     <ul class="meal-list" id="mealList"></ul>
     <p class="empty" id="mealEmpty">まだ記録がありません</p>
@@ -178,6 +169,84 @@
     <div class="week-chart" id="weekChart" role="list"></div>
   </section>
 
+  </div><!-- /pageLog -->
+
+</div>
+
+<!-- 写真を選ぶ欄（見えない）。下のタブの撮影ボタンから開く -->
+<input type="file" accept="image/*" capture="environment" id="photoInput" hidden>
+
+<!-- ========== 下のタブ ==========
+     縦に長くなったので3つに分けた。いちばんよく使う「きょう」を左に、
+     撮影ボタンを真ん中に置いて、どのタブからでもすぐ撮れるようにする -->
+<nav class="tabbar" aria-label="画面の切り替え">
+  <button class="tab" id="tabToday" role="tab" data-tab="pageToday" aria-selected="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"/></svg>
+    <span>きょう</span>
+  </button>
+  <button class="tab" id="tabSuggest" role="tab" data-tab="pageSuggest" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 11h14a7 7 0 0 1-14 0Z"/><path d="M9 4c0 1.5 1 1.5 1 3M14 4c0 1.5 1 1.5 1 3"/></svg>
+    <span>おすすめ</span>
+  </button>
+  <button class="tab fab" id="fab" aria-label="これ食っていい？ 写真で判定">
+    <span class="fab-circle">
+      <svg class="fab-cam" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.5-2h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      <svg class="fab-pen" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l1-4L16 5l3 3L9 18Z"/><path d="M14 7l3 3"/></svg>
+    </span>
+    <span>判定</span>
+  </button>
+  <button class="tab" id="tabLog" role="tab" data-tab="pageLog" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="16" rx="2.5"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>
+    <span>きろく</span>
+  </button>
+  <button class="tab" id="btnSettings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    <span>設定</span>
+  </button>
+</nav>
+
+<!-- ========== 判定結果（全画面） ==========
+     背景ごと結果の色にして、ハンコのように大きく出す。
+     リングは「いま食べた分（灰）」に「これを食べた分（色）」を足して見せる -->
+<div class="overlay verdict-screen" id="verdict" hidden>
+  <div class="verdict-inner" role="dialog" aria-labelledby="verdictHeadline">
+    <img class="verdict-photo" id="verdictPhoto" alt="撮影した写真">
+    <div class="verdict-stamp" id="verdictHeadline"></div>
+
+    <div class="verdict-food">
+      <div class="verdict-name" id="verdictName"></div>
+      <div class="verdict-portion" id="verdictPortion"></div>
+      <div class="verdict-kcal"><span id="verdictKcal"></span><span class="unit">kcal</span></div>
+      <div class="verdict-pfc" id="verdictPfc"></div>
+    </div>
+
+    <div class="verdict-after">
+      <div class="vring-wrap">
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="ring-track" cx="100" cy="100" r="86" />
+          <circle class="vring-add" id="vringAdd" cx="100" cy="100" r="86" />
+          <circle class="vring-now" id="vringNow" cx="100" cy="100" r="86" />
+        </svg>
+        <div class="ring-center">
+          <div class="ring-label" id="vringLabel">食べたら</div>
+          <div class="vring-value" id="vringValue">—</div>
+          <div class="ring-unit" id="vringUnit">kcal</div>
+        </div>
+      </div>
+      <ul class="vring-legend">
+        <li><i class="lg-now"></i>今日食べた分</li>
+        <li><i class="lg-add"></i>これを食べた分</li>
+      </ul>
+    </div>
+
+    <div class="verdict-note" id="verdictNote"></div>
+
+    <div class="verdict-actions">
+      <button class="btn-eat" id="btnEat">食べた！記録する</button>
+      <button class="btn-skip" id="btnSkip">やめた</button>
+    </div>
+    <button class="btn-link" id="btnFixKcal">カロリー・PFCを手で直す</button>
+  </div>
 </div>
 
 <!-- ========== 消費カロリーの入力（下から出てくる） ========== -->
@@ -201,7 +270,7 @@
 </div>
 
 <!-- ========== はじめての設定（全画面・1問ずつ） ==========
-     身長などが空のまま初めて開いたときに出す。⚙ の設定と同じ値を書き込む -->
+     身長などが空のまま初めて開いたときに出す。「設定」と同じ値を書き込む -->
 <div class="overlay panel" id="welcomePanel" hidden>
   <div class="panel-inner">
     <header class="panel-head">
@@ -266,7 +335,7 @@
           <span>ヘルスケアの「アクティブエネルギー」を入れる（基礎代謝はアプリが足します）</span>
         </button>
       </div>
-      <p class="hint">入れなくても、ふだんの活動量からの見込みで計算します。あとで ⚙ から変えられます。</p>
+      <p class="hint">入れなくても、ふだんの活動量からの見込みで計算します。あとで下の「設定」から変えられます。</p>
       <p class="hint">
         写真の判定と食事の提案には、GoogleのAI（Gemini）の無料枠を使います。
         送った写真や食事の内容が、Googleのサービス改善に使われることがあります。
