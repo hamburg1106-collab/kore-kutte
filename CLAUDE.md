@@ -36,7 +36,7 @@ Vite構成なので、置き場所を間違えると公開時に消える。
 | `src/data/` | 食品成分表から作ったデータ。**手で直さず** `tools/build-foods.cjs` で作り直す |
 | `tools/build-foods.cjs` | 文部科学省の食品成分表Excel → `src/data/` を作る。よく食べるもの・献立の一覧もここ |
 | `src/style.css` | 見た目 |
-| `public/` | そのまま配信されるもの（`sw.js` / `manifest.json` / アイコン） |
+| `public/` | そのまま配信されるもの（`sw.js` / `app.webmanifest` / アイコン） |
 | `index.html` | 画面の骨格 |
 | `dist/` | **ビルド結果。直接編集しない。毎回作り直される** |
 
@@ -57,6 +57,7 @@ Vite構成なので、置き場所を間違えると公開時に消える。
 - AIのモデル: 判定は Flash、提案は Flash-Lite → だめなら Flash。思考は MINIMAL、待ち上限あり。429（使いすぎ）は同じモデルで再試行せず Lite に逃がす
 - 起動時の読み込みは35日分（Firestore無料枠の読み込みを他のアプリと共用しているため）
 - manifest の `id` を変えるとChromeは別アプリ扱いになる。むやみに変えない
+- 11/7: id を変えても「すでにインストールされています」→「アプリを開けませんでした」が直らず、名札ファイル名（manifest.json→app.webmanifest）と start_url も変えて別アプリにした（sw v15）
 - `hamburg1106-collab.github.io` のサイトデータ削除は、全アプリの引き継ぎコード・キーが消えるので案内しない
 
 ## 未着手

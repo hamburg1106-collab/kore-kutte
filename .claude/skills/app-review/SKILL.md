@@ -11,7 +11,7 @@ description: 作ったスマホアプリ（PWA）を多角的にレビューし�
 
 ## 対象
 
-`index.html` / `src/main.js` / `src/style.css` / `public/sw.js` / `public/manifest.json`。
+`index.html` / `src/main.js` / `src/style.css` / `public/sw.js` / `public/app.webmanifest`。
 
 ユーザーが画面名（判定・今日の収支・設定）を指定したら、その範囲に絞る。
 
@@ -67,7 +67,7 @@ description: 作ったスマホアプリ（PWA）を多角的にレビューし�
 
 ## 手順
 
-1. 対象アプリのファイルを**全部読む**（HTML・CSS・JS・sw.js・manifest.json）。読まずに推測で書かない
+1. 対象アプリのファイルを**全部読む**（HTML・CSS・JS・sw.js・app.webmanifest）。読まずに推測で書かない
 2. 上の6観点で気になった点を洗い出す
 3. **実際に壊れているものと、好みの問題を分ける**
 4. 優先順位を付ける
