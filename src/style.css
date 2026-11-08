@@ -1316,3 +1316,89 @@ input:disabled, select:disabled { opacity: .45; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ===== 大皿の取り分け（判定結果の中） ===== */
+.verdict-share { margin-top: 14px; }
+.verdict-share-title { font-size: 12px; font-weight: 700; color: var(--ink-sub); margin-bottom: 6px; text-align: center; }
+.share-tabs { margin-bottom: 0; background: rgba(0,0,0,.06); }
+
+/* ===== 撮れない外食のシート ===== */
+.eatout-kinds {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.eatout-kinds button {
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.eatout-kinds button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+.eatout-label { font-size: 12px; font-weight: 700; color: var(--ink-sub); margin-bottom: 6px; }
+.eatout-levels { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
+.eatout-detail { margin: 0 0 12px; font-size: 12px; color: var(--ink-sub); min-height: 1.5em; }
+
+.eatout-drinks, .eatout-when {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.eatout-drinks > span:first-child { flex: 1; }
+.eatout-drinks small { display: block; font-size: 11px; font-weight: 400; color: var(--ink-sub); }
+.eatout-drinks b { min-width: 1.6em; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
+
+.eatout-when > span { flex: none; font-size: 12px; color: var(--ink-sub); }
+.eatout-when .slot-tabs { flex: 1; grid-template-columns: repeat(2, 1fr); margin-bottom: 0; }
+.eatout-when[hidden] { display: none; }
+
+.eatout-total { margin: 4px 0 2px; font-size: 14px; text-align: center; }
+.eatout-total b { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.eatout-total small { display: block; font-size: 12px; color: var(--ink-sub); }
+
+.eatout-close { display: block; margin: 0 auto; }
+
+/* ===== 食事一覧の「予定」 ===== */
+.meal-list li.is-plan { opacity: .85; }
+.meal-list li.is-plan .meal-kcal { color: var(--ink-sub); }
+
+.plan-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px dashed var(--ink-sub);
+  color: var(--ink-sub);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.plan-done {
+  margin-top: 6px;
+  padding: 6px 12px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}

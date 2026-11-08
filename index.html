@@ -94,6 +94,7 @@
   <div class="shoot-area" id="shootArea">
     <p class="shoot-tip" id="shootTip"></p>
     <button class="btn-link" id="btnManualOpen">写真なしで入力する</button>
+    <button class="btn-link" id="btnEatoutOpen">撮れない外食（食べ放題・飲み会）</button>
     <button class="setup-hint" id="setupHint" hidden></button>
   </div>
 
@@ -220,6 +221,12 @@
       <div class="verdict-pfc" id="verdictPfc"></div>
     </div>
 
+    <!-- 大皿のおかずは写真に家族全員の分が写るので、自分が取った割合で割る -->
+    <div class="verdict-share">
+      <div class="verdict-share-title">大皿から取り分けた？</div>
+      <div class="slot-tabs share-tabs" id="shareTabs" role="group" aria-label="自分が食べる割合"></div>
+    </div>
+
     <div class="verdict-after">
       <div class="vring-wrap">
         <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
@@ -266,6 +273,44 @@
       <button class="btn-sub" id="burnCancel">閉じる</button>
       <button class="btn-eat" id="burnSave">保存</button>
     </div>
+  </div>
+</div>
+
+<!-- ========== 撮れない外食（下から出てくる） ==========
+     食べ放題・飲み会など、1品ずつ撮れない店をまとめて1件にする。
+     行く前に「予定」で入れておくと、残りカロリーから先に取っておける -->
+<div class="overlay sheet" id="eatoutSheet" hidden>
+  <div class="sheet-card" role="dialog" aria-labelledby="eatoutTitle">
+    <h3 id="eatoutTitle">撮れない外食</h3>
+    <div class="eatout-kinds" id="eatoutKinds" role="group" aria-label="お店の種類"></div>
+
+    <div class="eatout-label">どのくらい食べる？</div>
+    <div class="slot-tabs eatout-levels" id="eatoutLevels" role="group" aria-label="食べる量"></div>
+    <p class="eatout-detail" id="eatoutDetail"></p>
+
+    <div class="eatout-drinks">
+      <span>お酒<small>1杯 ≈150kcal（ビール中・サワー・ハイボール）</small></span>
+      <button class="icon-btn" id="eatoutDrinkMinus" aria-label="お酒を1杯減らす"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+      <b id="eatoutDrinks">0</b>杯
+      <button class="icon-btn" id="eatoutDrinkPlus" aria-label="お酒を1杯増やす"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+
+    <div class="eatout-when" id="eatoutWhenRow">
+      <span>予定のときは</span>
+      <div class="slot-tabs" id="eatoutWhen" role="group" aria-label="行く時間帯">
+        <button type="button" data-when="昼">昼に行く</button>
+        <button type="button" data-when="夜">夜に行く</button>
+      </div>
+    </div>
+
+    <div class="eatout-total">約 <b id="eatoutKcal">—</b> kcal<small id="eatoutPfc"></small></div>
+    <p class="hint" id="eatoutHint">食べ放題の目安です。行く前に「予定」で入れておくと、残りカロリーから先に取っておけます。</p>
+
+    <div class="sheet-actions">
+      <button class="btn-sub" id="eatoutPlan">これから行く（予定）</button>
+      <button class="btn-eat" id="eatoutSave">食べた！記録する</button>
+    </div>
+    <button class="btn-link eatout-close" id="eatoutCancel">閉じる</button>
   </div>
 </div>
 
@@ -388,6 +433,19 @@
       <div>基礎代謝 <strong id="showBmr">—</strong> kcal</div>
       <div>1日の消費の目安 <strong id="showTdee">—</strong> kcal</div>
     </div>
+
+    <h3 class="sec-title">大皿のおかず</h3>
+    <label class="wide">自分が食べるいつもの割合
+      <select id="inShareRatio">
+        <option value="0.3">3割</option>
+        <option value="0.4">4割</option>
+        <option value="0.5">5割</option>
+        <option value="0.6">6割</option>
+        <option value="0.7">7割</option>
+        <option value="0.8">8割</option>
+      </select>
+    </label>
+    <p class="hint">判定結果の「大皿から取り分けた？」に、この割合のボタンが出ます。</p>
 
     <h3 class="sec-title">消費カロリーの入れ方</h3>
     <label class="wide">

@@ -17,6 +17,7 @@ import "firebase/compat/firestore";
 import { loadFoods, searchFoods } from "./foods.js";
 import { nextSlot, buildSuggestion, weekTrend, trendText, SLOT_LABEL } from "./suggest.js";
 import { sharedGenerate, sharedErrorStatus, sharedAiAvailable } from "./ai.js";
+import { EATOUT_KINDS, EATOUT_LEVELS, eatoutRecord } from "./eatout.js";
 
 /* 一覧が取れていないときに使うモデル。
    最新ではなく一世代前を既定にする（理由は resolveModel のコメント） */
@@ -373,6 +374,7 @@ const state = {
     goal: "keep",
     burnMode: "total", // 消費カロリーの入れ方。total=合計(Android) / active=動いた分だけ(iPhone)
     model: "auto",
+    shareRatio: 0.6, // 大皿のおかずのうち、自分が食べるいつもの割合
   },
   profileId: null,
   meals: [],
@@ -615,6 +617,15 @@ function calcIntake(key) {
   return mealsOf(key).reduce((sum, m) => sum + (Number(m.kcal) || 0), 0);
 }
 
+/* 「これから行く」で入れた外食の予定。まだ食べていないが、残りカロリーからは先に引いておく */
+function plansOf(key) {
+  return mealsOf(key).filter((m) => m.plan);
+}
+
+function calcPlanned(key) {
+  return plansOf(key).reduce((sum, m) => sum + (Number(m.kcal) || 0), 0);
+}
+
 function calcRemain(key) {
   return calcBurn(key) - calcIntake(key) - (GOAL_DIFF[state.profile.goal] || 0);
 }
@@ -799,8 +810,10 @@ function renderHero() {
 
   const goal = state.profile.goal;
   const goalNote = goal && goal !== "keep" ? "（" + GOAL_TEXT[goal] + "）" : "";
+  const planned = calcPlanned(key);
   sub.textContent =
     "食べた " + intake.toLocaleString() +
+    (planned ? "（予定 " + planned.toLocaleString() + " を含む）" : "") +
     " ／ 目標 " + target.toLocaleString() + goalNote +
     (target > 0 ? " ・ " + Math.round(ratio * 100) + "%" : "");
 }
@@ -907,8 +920,14 @@ let pickedSlot = null;
 
 function currentSlot() {
   if (pickedSlot) return pickedSlot;
-  const last = mealsOf(todayKey()).reduce((t, m) => (m.createdAt && m.createdAt > t ? m.createdAt : t), "");
-  return nextSlot(new Date(), last ? new Date(last) : null);
+  const meals = mealsOf(todayKey());
+  const last = meals
+    .filter((m) => !m.plan)
+    .reduce((t, m) => (m.createdAt && m.createdAt > t ? m.createdAt : t), "");
+  const slot = nextSlot(new Date(), last ? new Date(last) : null);
+  // 次の食事が外食の予定そのものなら、それまでの間食をすすめる
+  const planned = meals.some((m) => m.plan && m.planSlot === slot);
+  return planned ? "間食" : slot;
 }
 
 document.querySelectorAll("#slotTabs [data-slot]").forEach((btn) => {
@@ -1024,6 +1043,13 @@ function renderSuggest() {
     li.textContent = t;
     advice.appendChild(li);
   });
+  plansOf(todayKey()).forEach((m) => {
+    const li = document.createElement("li");
+    li.textContent =
+      (m.planSlot === "昼" ? "昼" : "今夜") + "は「" + m.name + "」の予定。" +
+      (Number(m.kcal) || 0).toLocaleString() + "kcal を先に取ってあります。";
+    advice.insertBefore(li, advice.firstChild);
+  });
   const trend = trendText(calcWeekTrend());
   if (trend) {
     const li = document.createElement("li");
@@ -1093,6 +1119,7 @@ function renderMealList() {
     }
 
     const li = document.createElement("li");
+    if (m.plan) li.className = "is-plan";
 
     // 写真のない記録も行の頭を揃える
     if (m.thumb) {
@@ -1115,10 +1142,17 @@ function renderMealList() {
     name.className = "meal-name";
     name.textContent = m.name;
     name.title = m.name; // 2行で切れたときに全文を確認できるように
+    if (m.plan) {
+      const tag = document.createElement("span");
+      tag.className = "plan-tag";
+      tag.textContent = "予定";
+      name.prepend(tag);
+    }
     body.appendChild(name);
 
-    // 食べた時刻と量を1行に並べる
-    const subText = [t ? hhmmOf(t) : "", m.portion || ""].filter(Boolean).join("　");
+    // 食べた時刻と量を1行に並べる（予定は時刻ではなく昼・夜）
+    const when = m.plan ? (m.planSlot || "夜") + "に行く" : t ? hhmmOf(t) : "";
+    const subText = [when, m.portion || ""].filter(Boolean).join("　");
     if (subText) {
       const portion = document.createElement("div");
       portion.className = "meal-portion";
@@ -1132,6 +1166,16 @@ function renderMealList() {
       line.className = "meal-pfc";
       line.textContent = pfcText(pfc, " ");
       body.appendChild(line);
+    }
+
+    // 予定は、行ってきたら実際の量で確定する
+    if (m.plan && !old) {
+      const done = document.createElement("button");
+      done.type = "button";
+      done.className = "plan-done";
+      done.textContent = "行ってきた → 量を確定";
+      done.onclick = () => openEatout(m);
+      body.appendChild(done);
     }
 
     li.appendChild(body);
@@ -1568,6 +1612,7 @@ const settingFields = [
   ["inGoal", "goal", String],
   ["inBurnMode", "burnMode", String],
   ["inModel", "model", String],
+  ["inShareRatio", "shareRatio", Number],
 ];
 
 function fillSettingsForm() {
@@ -2039,7 +2084,7 @@ function canUseAi() {
 
 /* 今日の記録の「指紋」。記録が増えたり消えたりしたら、取っておいた提案は古い */
 function aiSuggestSig(slot) {
-  const ids = mealsOf(todayKey()).map((m) => m.id + ":" + m.kcal).sort().join(",");
+  const ids = mealsOf(todayKey()).map((m) => m.id + ":" + m.kcal + (m.plan ? "p" : "")).sort().join(",");
   return todayKey() + "|" + slot + "|" + ids;
 }
 
@@ -2100,6 +2145,10 @@ function aiSuggestPrompt(s) {
           const t = m.createdAt ? new Date(m.createdAt) : null;
           const time = t ? t.getHours() + ":" + String(t.getMinutes()).padStart(2, "0") + " " : "";
           const p = pfcOf(m);
+          if (m.plan) {
+            return "  - 予定（まだ食べていない・" + (m.planSlot || "夜") + "）: " + m.name +
+              "（" + m.portion + "）" + m.kcal + "kcal " + (p ? pfcText(p, " ") : "");
+          }
           return "  - " + time + m.name + (m.portion ? "（" + m.portion + "）" : "") + " " + m.kcal + "kcal " +
             (p ? pfcText(p, " ") : "PFC不明");
         })
@@ -2118,7 +2167,8 @@ function aiSuggestPrompt(s) {
     "- 今日の目標: " + target + "kcal（P " + pt.protein + "g・F " + pt.fat + "g・C " + pt.carbs + "g）",
     "- 今日食べたもの:",
     mealLines,
-    "- 食べた合計: " + calcIntake(key) + "kcal（" + pfcText(intake, "・") + "）",
+    "- 食べた合計: " + calcIntake(key) + "kcal（" + pfcText(intake, "・") + "）" +
+      (calcPlanned(key) ? "。このうち " + calcPlanned(key) + "kcal は外食の予定の目安" : ""),
     s.over
       ? "- 今日は目標を " + Math.abs(remain) + "kcal 超えている。食べるなら " + s.budget + "kcal 以下"
       : "- 残り: " + remain + "kcal。次の" + SLOT_LABEL[s.slot] + "の目安は " + s.budget + "kcal",
@@ -2131,6 +2181,7 @@ function aiSuggestPrompt(s) {
     "- 足りない栄養素を補い、取りすぎている栄養素は控えめにする",
     "- name は20文字以内。detail は量や選び方のコツを20文字程度で",
     "- advice は今日の食事を踏まえた一言を2文以内で。責める言い方はしない",
+    plansOf(key).length ? "- 外食の予定がある。その分は残りから引いてあるので、予定の前の食事として軽めにする" : "",
   ].join("\n");
 }
 
@@ -2233,7 +2284,70 @@ function showError(msg) {
   verdictEl.hidden = true;
 }
 
+/* ---------- 大皿の取り分け ----------
+   AIは「写っている量ぜんぶ」で見積もるので、大皿だと家族全員の分になる。
+   分ける前の数字（base）を残しておき、選んだ割合を掛けて自分の分にする */
+
+function shareChoices() {
+  const mine = Number(state.profile.shareRatio) || 0.6;
+  const list = [
+    [1, "ぜんぶ"],
+    [mine, Math.round(mine * 10) + "割"],
+    [1 / 2, "半分"],
+    [1 / 3, "1/3"],
+    [1 / 4, "1/4"],
+  ];
+  // いつもの割合が5割のときは「半分」と重なるので1つにする
+  return list.filter(([v], i) => list.findIndex(([w]) => Math.abs(w - v) < 0.01) === i);
+}
+
+function shareLabel(r) {
+  const hit = shareChoices().find(([v]) => Math.abs(v - r) < 0.01);
+  return hit ? hit[1] : Math.round(r * 100) + "%";
+}
+
+/* 判定待ちの食べ物に割合を当てる。PFCが不明（null）のものは不明のまま */
+function applyShare(f, r) {
+  if (!f.base) {
+    f.base = { kcal: f.kcal, portion: f.portion || "" };
+    PFC_KEYS.forEach((k) => (f.base[k] = f[k]));
+  }
+  f.share = r;
+  f.kcal = Math.round(f.base.kcal * r);
+  PFC_KEYS.forEach((k) => (f[k] = f.base[k] === null || f.base[k] === undefined ? null : gramOf(f.base[k] * r)));
+  f.portion = r < 1 ? "大皿の" + shareLabel(r) + (f.base.portion ? "（全体 " + f.base.portion + "）" : "") : f.base.portion;
+}
+
+function renderShareTabs() {
+  const f = state.pending;
+  const box = document.getElementById("shareTabs");
+  box.innerHTML = "";
+  box.style.gridTemplateColumns = "repeat(" + shareChoices().length + ", 1fr)";
+  shareChoices().forEach(([v, label]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.setAttribute("aria-pressed", String(Math.abs((f.share || 1) - v) < 0.01));
+    btn.onclick = () => {
+      applyShare(state.pending, v);
+      renderVerdict();
+    };
+    box.appendChild(btn);
+  });
+}
+
+/* 判定結果を全画面で出す。開き直すたびにハンコの動きをもう一度見せる */
 function showVerdict() {
+  renderVerdict();
+  // おすすめのタブから判定したときも、結果は「きょう」のタブに出す
+  if (document.getElementById("pageToday").hidden) showTab("pageToday");
+  errorEl.hidden = true;
+  verdictEl.scrollTop = 0;
+  openOverlay(verdictEl);
+}
+
+/* 判定結果の中身だけ描き直す（取り分けを選び直したとき） */
+function renderVerdict() {
   const f = state.pending;
   const remain = calcRemain(todayKey());
   const mark = decide(f.kcal, remain);
@@ -2256,14 +2370,7 @@ function showVerdict() {
   // 食べたあとに残る量はリングで見せるので、ここには書かない。今すでにオーバーしているときだけ添える
   if (mark === "stop" && remain <= 0) note += "　今日はもう目標を超えています。";
   document.getElementById("verdictNote").textContent = note;
-
-  // おすすめのタブから判定したときも、結果は「きょう」のタブに出す
-  if (document.getElementById("pageToday").hidden) showTab("pageToday");
-
-  errorEl.hidden = true;
-  // 全画面で出す。開き直すたびにハンコの動きをもう一度見せる
-  verdictEl.scrollTop = 0;
-  openOverlay(verdictEl);
+  renderShareTabs();
 }
 
 /* 判定結果のリング。今日すでに食べた分（灰）の先に、これを食べた分（結果の色）を足して描く */
@@ -2306,6 +2413,7 @@ btnEat.onclick = async () => {
       fat: gramOf(f.fat),
       carbs: gramOf(f.carbs),
       thumb: f.thumb || "",
+      share: f.share && f.share < 1 ? Math.round(f.share * 1000) / 1000 : 1,
       createdAt: new Date().toISOString(),
     });
   } catch (e) {
@@ -2338,8 +2446,14 @@ document.getElementById("btnSkip").onclick = () => {
 document.getElementById("btnFixKcal").onclick = () => {
   const f = state.pending;
   if (!f) return;
-  openModal("カロリー・PFCを直す", f, (edited) => {
+  // 取り分けているときは、分ける前（お皿ぜんぶ）の数字を直してもらい、同じ割合を掛け直す
+  const shared = f.base && f.share < 1;
+  const initial = shared ? Object.assign({ name: f.name }, f.base) : f;
+  openModal(shared ? "お皿ぜんぶの量を直す" : "カロリー・PFCを直す", initial, (edited) => {
+    const r = f.share || 1;
     Object.assign(state.pending, edited);
+    state.pending.base = null;
+    applyShare(state.pending, r);
     showVerdict();
   });
 };
@@ -2556,6 +2670,155 @@ function openJudge(initial) {
     "判定する"
   );
 }
+
+/* ---------- 撮れない外食 ----------
+   お店の種類・量・お酒の杯数で、まとめて1件にする。
+   「これから行く」は予定として入れ、残りカロリーから先に引いておく。
+   行ってきたら、その予定を実際の量で確定する（editing にその記録が入る） */
+
+const eatoutSheet = document.getElementById("eatoutSheet");
+const eatout = { kind: EATOUT_KINDS[0].id, level: "ふつう", drinks: 0, when: "夜", editing: null };
+
+function openEatout(meal) {
+  if (!calcBmr(state.profile)) {
+    openWelcome();
+    return;
+  }
+  const from = meal && meal.eatout;
+  const kind = EATOUT_KINDS.find((k) => from && k.id === from.kind) || EATOUT_KINDS[0];
+  eatout.kind = kind.id;
+  eatout.level = (from && from.level) || "ふつう";
+  eatout.drinks = from ? from.drinks : kind.drinks;
+  eatout.when = (meal && meal.planSlot) || "夜";
+  eatout.editing = meal || null;
+
+  const editing = !!meal;
+  document.getElementById("eatoutTitle").textContent = editing ? "行ってきた：量を確定" : "撮れない外食";
+  document.getElementById("eatoutPlan").hidden = editing;
+  document.getElementById("eatoutWhenRow").hidden = editing;
+  document.getElementById("eatoutSave").textContent = editing ? "この量で確定" : "食べた！記録する";
+  document.getElementById("eatoutHint").textContent = editing
+    ? "実際に食べた量に近いものを選んでください。"
+    : "目安の数字です。行く前に「予定」で入れておくと、残りカロリーから先に取っておけます。";
+  renderEatout();
+  openOverlay(eatoutSheet);
+}
+
+function eatoutButtons(boxId, items, current, onPick) {
+  const box = document.getElementById(boxId);
+  box.innerHTML = "";
+  items.forEach(([value, label]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.setAttribute("aria-pressed", String(value === current));
+    btn.onclick = () => {
+      onPick(value);
+      renderEatout();
+    };
+    box.appendChild(btn);
+  });
+}
+
+function renderEatout() {
+  eatoutButtons("eatoutKinds", EATOUT_KINDS.map((k) => [k.id, k.name]), eatout.kind, (id) => {
+    eatout.kind = id;
+    // 飲む店かどうかで、お酒の杯数のはじめの値を変える
+    eatout.drinks = EATOUT_KINDS.find((k) => k.id === id).drinks;
+  });
+  eatoutButtons("eatoutLevels", EATOUT_LEVELS.map((l) => [l, l]), eatout.level, (l) => (eatout.level = l));
+  document.querySelectorAll("#eatoutWhen [data-when]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", String(btn.dataset.when === eatout.when));
+  });
+
+  const kind = EATOUT_KINDS.find((k) => k.id === eatout.kind);
+  document.getElementById("eatoutDetail").textContent = kind.levels[EATOUT_LEVELS.indexOf(eatout.level)][4];
+  document.getElementById("eatoutDrinks").textContent = eatout.drinks;
+  document.getElementById("eatoutDrinkMinus").disabled = eatout.drinks <= 0;
+
+  const rec = eatoutRecord(eatout.kind, eatout.level, eatout.drinks);
+  document.getElementById("eatoutKcal").textContent = rec.kcal.toLocaleString();
+  document.getElementById("eatoutPfc").textContent = pfcText(rec, " ");
+}
+
+document.querySelectorAll("#eatoutWhen [data-when]").forEach((btn) => {
+  btn.onclick = () => {
+    eatout.when = btn.dataset.when;
+    renderEatout();
+  };
+});
+document.getElementById("eatoutDrinkMinus").onclick = () => {
+  eatout.drinks = Math.max(0, eatout.drinks - 1);
+  renderEatout();
+};
+document.getElementById("eatoutDrinkPlus").onclick = () => {
+  eatout.drinks = Math.min(20, eatout.drinks + 1);
+  renderEatout();
+};
+document.getElementById("eatoutCancel").onclick = () => closeOverlay(eatoutSheet);
+document.getElementById("btnEatoutOpen").onclick = () => openEatout(null);
+
+/* 予定の時刻。昼・夜のまとまりに入るよう、その日の12時か19時にしておく */
+function planTime(slot) {
+  const d = new Date();
+  d.setHours(slot === "昼" ? 12 : 19, 0, 0, 0);
+  return d.toISOString();
+}
+
+async function saveEatout(asPlan) {
+  const rec = eatoutRecord(eatout.kind, eatout.level, eatout.drinks);
+  const fields = {
+    name: rec.name,
+    portion: rec.portion,
+    kcal: rec.kcal,
+    protein: rec.protein,
+    fat: rec.fat,
+    carbs: rec.carbs,
+    eatout: rec.eatout,
+  };
+  const editing = eatout.editing;
+  const buttons = [document.getElementById("eatoutPlan"), document.getElementById("eatoutSave")];
+  buttons.forEach((b) => (b.disabled = true)); // 二度押しで2件入らないように
+
+  try {
+    if (editing) {
+      await Store.update("meals", editing.id, Object.assign(fields, { plan: false }));
+    } else {
+      await Store.add(
+        "meals",
+        Object.assign(fields, {
+          date: todayKey(),
+          thumb: "",
+          share: 1,
+          plan: asPlan,
+          planSlot: asPlan ? eatout.when : "",
+          createdAt: asPlan ? planTime(eatout.when) : new Date().toISOString(),
+        })
+      );
+    }
+  } catch (e) {
+    notifySaveFailed(e, "記録");
+    return;
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+
+  closeOverlay(eatoutSheet);
+  const dayKey = editing ? editing.date : todayKey();
+  const remain = calcRemain(dayKey);
+  const head = asPlan ? "予定に入れました" : editing ? "確定しました" : "記録しました";
+  showToast(
+    dayKey !== todayKey()
+      ? labelOf(dayKey) + " の予定を確定しました"
+      : remain > 0
+      ? head + "　残り " + remain.toLocaleString() + " kcal"
+      : head + "　今日はオーバーしています"
+  );
+  afterMealRecorded(dayKey);
+}
+
+document.getElementById("eatoutPlan").onclick = () => saveEatout(true);
+document.getElementById("eatoutSave").onclick = () => saveEatout(false);
 
 /* 下のタブの真ん中の判定ボタン。どのタブ・どの日を見ていても、今日の「きょう」に戻ってから判定する。
    AIが使えるときは写真を選ぶ画面、使えないときはカロリーを入れる画面を開く */
