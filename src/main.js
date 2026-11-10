@@ -175,13 +175,6 @@ function resolveModel() {
   return ranked[1] || ranked[0];
 }
 
-/* 混み合っていたときに逃がす先。本命とは違うものを返す */
-function fallbackModel() {
-  const primary = resolveModel();
-  const other = rankedFlashModels().find((id) => id !== primary);
-  return other || primary;
-}
-
 /* APIキーで使えるモデルの一覧を取り直す */
 async function fetchModels(key) {
   const res = await fetch(
@@ -1904,15 +1897,13 @@ async function callGemini(parts, schema, onRetry, shared) {
     return callSharedGemini(parts, schema, onRetry, shared || SHARED_JUDGE);
   }
 
-  const body = {
-    contents: [{ parts: parts }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: schema,
-    },
-  };
+  // 待ち時間の上限は、みんなで使うAIと同じにする（判定45秒・提案30秒）
+  const timeoutMs = (shared || SHARED_JUDGE).timeoutMs;
 
-  const models = [resolveModel(), resolveModel(), fallbackModel()];
+  /* 混雑が続いたときの最後の逃がし先は Flash-Lite。
+     いちばん新しいFlashは出たばかりで混みやすく、逃がし先に向かない。
+     Lite は無料枠が別（1日500回）なので、他のアプリと分け合っている Flash の枠（1日20回）も減らさずに済む */
+  const models = [resolveModel(), resolveModel(), LITE_MODEL];
   let lastError = null;
   let quotaSwitch = false;
 
@@ -1926,24 +1917,21 @@ async function callGemini(parts, schema, onRetry, shared) {
     }
 
     const model = models[i];
-    const url =
-      "https://generativelanguage.googleapis.com/v1beta/models/" +
-      encodeURIComponent(model) +
-      ":generateContent";
 
-    let res;
+    let res, data;
     try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(body),
-      });
+      ({ res, data } = await generateWithKey(key, model, parts, schema, timeoutMs));
     } catch (e) {
-      lastError = new Error("通信できませんでした。ネットワークの状態を確認してください。");
+      lastError =
+        e && e.name === "AbortError"
+          ? new Error(
+              "AIから返事がありませんでした。混み合っているようです。少し待ってからもう一度試してください。\n\n" +
+                model + " / " + timeoutMs / 1000 + "秒で打ち切り"
+            )
+          : new Error("通信できませんでした。ネットワークの状態を確認してください。");
       continue;
     }
 
-    const data = await res.json().catch(() => null);
     if (res.ok) return parseJudgement(data);
 
     const msg = (data && data.error && data.error.message) || "HTTP " + res.status;
@@ -1979,6 +1967,48 @@ async function callGemini(parts, schema, onRetry, shared) {
   }
 
   throw lastError || new Error("判定に失敗しました。もう一度試してください。");
+}
+
+/* 自分のキーで1回頼む。
+
+   Flash は答える前に考える時間が長いので、思考を最小にする（みんなで使うAIと同じ）。
+   思考の指定に対応していないモデルは 400 を返すので、そのときは指定を外して頼み直す。
+   キーの誤りも 400 だが、頼み直しても同じ 400 が返るだけで、呼び出し元がキーの誤りとして扱う */
+async function generateWithKey(key, model, parts, schema, timeoutMs) {
+  const body = (thinkLess) => {
+    const generationConfig = { responseMimeType: "application/json", responseSchema: schema };
+    if (thinkLess) generationConfig.thinkingConfig = { thinkingLevel: "minimal" };
+    return { contents: [{ parts: parts }], generationConfig: generationConfig };
+  };
+  const first = await postGenerate(key, model, body(true), timeoutMs);
+  if (first.res.status !== 400) return first;
+  return postGenerate(key, model, body(false), timeoutMs);
+}
+
+/* 返事を待つのは timeoutMs まで。超えたら AbortError を投げる。
+   無料枠は混むと返事をしないまま抱え込み、何分も経ってから503を返すことがある
+   （2026-11-10 実測で1回あたり最長 約17分半）。上限がないと「判定中…」のまま固まって見える */
+async function postGenerate(key, model, body, timeoutMs) {
+  const url =
+    "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    // 本文を受け取っている途中で打ち切ったときは、壊れた答えとしてではなく打ち切りとして扱う
+    const data = await res.json().catch((e) => {
+      if (ctrl.signal.aborted) throw e;
+      return null;
+    });
+    return { res: res, data: data };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* みんなで使うAIで呼ぶ。試し直しの考え方は自分のキーのときと同じ
