@@ -18,6 +18,7 @@ import { loadFoods, searchFoods } from "./foods.js";
 import { nextSlot, buildSuggestion, weekTrend, trendText, SLOT_LABEL } from "./suggest.js";
 import { sharedGenerate, sharedErrorStatus, sharedAiAvailable } from "./ai.js";
 import { EATOUT_KINDS, EATOUT_LEVELS, eatoutRecord } from "./eatout.js";
+import { USUAL_MEALS } from "./usual.js";
 
 /* 一覧が取れていないときに使うモデル。
    最新ではなく一世代前を既定にする（理由は resolveModel のコメント） */
@@ -2846,6 +2847,88 @@ async function saveEatout(asPlan) {
   );
   afterMealRecorded(dayKey);
 }
+
+/* ---------- いつもの朝食 ----------
+   決まった朝食を、撮らずに1タップで記録する（中身は usual.js） */
+
+const usualSheet = document.getElementById("usualSheet");
+
+function openUsual() {
+  if (!calcBmr(state.profile)) {
+    openWelcome();
+    return;
+  }
+  const box = document.getElementById("usualList");
+  box.innerHTML = "";
+  USUAL_MEALS.forEach((u) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "usual-item";
+    const name = document.createElement("b");
+    name.textContent = u.name;
+    const sub = document.createElement("small");
+    sub.textContent = u.portion + "　" + pfcText(u, " ");
+    const kcal = document.createElement("span");
+    kcal.className = "usual-kcal";
+    kcal.textContent = u.kcal.toLocaleString() + " kcal";
+    btn.append(name, sub, kcal);
+    btn.onclick = () => saveUsual(u, btn);
+    box.appendChild(btn);
+  });
+  openOverlay(usualSheet);
+}
+
+async function saveUsual(u, btn) {
+  const all = document.querySelectorAll("#usualList button");
+  all.forEach((b) => (b.disabled = true)); // 二度押しで2件入らないように
+  try {
+    await Store.add("meals", {
+      name: u.name,
+      portion: u.portion,
+      kcal: u.kcal,
+      protein: u.protein,
+      fat: u.fat,
+      carbs: u.carbs,
+      date: todayKey(),
+      thumb: "",
+      share: 1,
+      plan: false,
+      planSlot: "",
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    notifySaveFailed(e, "記録");
+    return;
+  } finally {
+    all.forEach((b) => (b.disabled = false));
+  }
+  closeOverlay(usualSheet);
+  const remain = calcRemain(todayKey());
+  showToast(remain > 0 ? "記録しました　残り " + remain.toLocaleString() + " kcal" : "記録しました　今日はオーバーしています");
+  afterMealRecorded(todayKey());
+}
+
+/* 中身は本人専用なので、設定で「表示する」にした端末だけに出す（友達の端末では出ない） */
+const USUAL_SHOW_STORAGE = "korekutte_usual_show";
+function usualShown() {
+  try {
+    return localStorage.getItem(USUAL_SHOW_STORAGE) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+const usualShowSelect = document.getElementById("inUsualShow");
+usualShowSelect.value = usualShown() ? "1" : "0";
+document.getElementById("btnUsualOpen").hidden = !usualShown();
+usualShowSelect.onchange = () => {
+  try {
+    localStorage.setItem(USUAL_SHOW_STORAGE, usualShowSelect.value);
+  } catch (e) {}
+  document.getElementById("btnUsualOpen").hidden = !usualShown();
+};
+
+document.getElementById("btnUsualOpen").onclick = () => openUsual();
+document.getElementById("usualCancel").onclick = () => closeOverlay(usualSheet);
 
 document.getElementById("eatoutPlan").onclick = () => saveEatout(true);
 document.getElementById("eatoutSave").onclick = () => saveEatout(false);

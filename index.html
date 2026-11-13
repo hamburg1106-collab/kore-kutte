@@ -93,8 +93,9 @@
   <!-- 撮影ボタンは下のタブの真ん中に移した。ここには補助の入口だけ残す（今日を表示しているときだけ） -->
   <div class="shoot-area" id="shootArea">
     <p class="shoot-tip" id="shootTip"></p>
-    <button class="btn-link" id="btnManualOpen">写真なしで入力する</button>
+    <button class="btn-link" id="btnUsualOpen" hidden>いつもの朝食（朝マック・サンドイッチ）</button>
     <button class="btn-link" id="btnEatoutOpen">撮れない外食（食べ放題・飲み会）</button>
+    <button class="btn-link" id="btnManualOpen">写真なしで入力する</button>
     <button class="setup-hint" id="setupHint" hidden></button>
   </div>
 
@@ -279,6 +280,15 @@
 <!-- ========== 撮れない外食（下から出てくる） ==========
      食べ放題・飲み会など、1品ずつ撮れない店をまとめて1件にする。
      行く前に「予定」で入れておくと、残りカロリーから先に取っておける -->
+<div class="overlay sheet" id="usualSheet" hidden>
+  <div class="sheet-card" role="dialog" aria-labelledby="usualTitle">
+    <h3 id="usualTitle">いつもの朝食</h3>
+    <p class="hint">タップするとそのまま記録します。</p>
+    <div class="usual-list" id="usualList"></div>
+    <button class="btn-link eatout-close" id="usualCancel">閉じる</button>
+  </div>
+</div>
+
 <div class="overlay sheet" id="eatoutSheet" hidden>
   <div class="sheet-card" role="dialog" aria-labelledby="eatoutTitle">
     <h3 id="eatoutTitle">撮れない外食</h3>
@@ -446,6 +456,15 @@
       </select>
     </label>
     <p class="hint">判定結果の「大皿から取り分けた？」に、この割合のボタンが出ます。</p>
+
+    <h3 class="sec-title">いつもの朝食</h3>
+    <label class="wide">
+      <select id="inUsualShow">
+        <option value="0">表示しない</option>
+        <option value="1">表示する</option>
+      </select>
+    </label>
+    <p class="hint">決まった朝食を1タップで記録するボタンを、ホームに出します。</p>
 
     <h3 class="sec-title">消費カロリーの入れ方</h3>
     <label class="wide">

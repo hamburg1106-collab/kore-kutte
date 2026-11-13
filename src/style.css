@@ -1373,6 +1373,28 @@ input:disabled, select:disabled { opacity: .45; }
 
 .eatout-close { display: block; margin: 0 auto; }
 
+/* いつもの朝食 */
+.usual-list { display: grid; gap: 8px; margin: 8px 0 14px; }
+.usual-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.usual-item b { font-size: 14px; line-height: 1.35; }
+.usual-item small { grid-column: 1; font-size: 11px; color: var(--ink-sub); }
+.usual-kcal { grid-column: 2; grid-row: 1 / span 2; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usual-item:disabled { opacity: 0.5; }
+
 /* ===== 食事一覧の「予定」 ===== */
 .meal-list li.is-plan { opacity: .85; }
 .meal-list li.is-plan .meal-kcal { color: var(--ink-sub); }
